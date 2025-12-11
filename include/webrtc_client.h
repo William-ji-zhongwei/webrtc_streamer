@@ -11,61 +11,81 @@
 #include <mutex>
 #include <condition_variable>
 
+// Forward declarations for WebRTC types
+namespace rtc {
+    template<typename T> class scoped_refptr;
+}
+namespace webrtc {
+    class PeerConnectionFactoryInterface;
+    class PeerConnectionInterface;
+    class VideoTrackSourceInterface;
+    class VideoTrackInterface;
+    class DataChannelInterface;
+    class IceCandidateInterface;
+    class SessionDescriptionInterface;
+}
+
+class PeerConnectionObserver;
+class CreateSessionDescriptionObserver;
+class SetSessionDescriptionObserver;
+class H265VideoEncoder;
+class CustomVideoSource;
+
 /**
- * @brief WebRTC client for streaming video
- * 
- * This is a simplified implementation. For production use,
- * you should use the official WebRTC native API.
+ * @brief WebRTC client with native API and H.265 support
  */
 class WebRTCClient {
 public:
-    /**
-     * @brief Constructor
-     * @param video_source Shared pointer to video source
-     * @param webrtc_config WebRTC configuration (including ICE servers)
-     */
     WebRTCClient(std::shared_ptr<VideoSource> video_source,
                  const WebRTCConfig& webrtc_config);
-
     ~WebRTCClient();
 
-    /**
-     * @brief Initialize the WebRTC connection
-     * @return true if successful
-     */
     bool initialize();
-
-    /**
-     * @brief Start streaming
-     * @return true if successful
-     */
     bool start();
-
-    /**
-     * @brief Stop streaming
-     */
     void stop();
-
-    /**
-     * @brief Check if streaming is active
-     * @return true if streaming
-     */
     bool isStreaming() const { return is_streaming_; }
+    
+    // Callbacks from observers
+    void OnIceCandidate(const webrtc::IceCandidateInterface* candidate);
+    void OnConnectionChange(bool connected);
+    void OnOfferCreated(webrtc::SessionDescriptionInterface* desc);
+    void OnAnswerSet();
 
 private:
     void streamingThread();
     void signalingThread();
+    void captureAndEncodeFrames();
+    
+    bool createPeerConnection();
+    bool addVideoTrack();
+    void createOffer();
+    void sendMessage(const std::string& message);
+    std::string receiveMessage();
     
     std::shared_ptr<VideoSource> video_source_;
     WebRTCConfig webrtc_config_;
     
     std::atomic<bool> is_streaming_;
     std::atomic<bool> should_stop_;
+    std::atomic<bool> peer_connected_;
     
     std::thread streaming_thread_;
     std::thread signaling_thread_;
     
-    // Frame buffer for encoding
+    // WebRTC components
+    rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> peer_connection_factory_;
+    rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track_;
+    std::shared_ptr<CustomVideoSource> custom_video_source_;
+    
+    // Observers
+    std::shared_ptr<PeerConnectionObserver> pc_observer_;
+    
+    // WebSocket connection
+    int ws_socket_;
+    std::mutex ws_mutex_;
+    
+    // Frame buffer
     std::queue<cv::Mat> frame_queue_;
     std::mutex queue_mutex_;
     std::condition_variable queue_cv_;

@@ -1,9 +1,10 @@
 """
 WebRTC 接收端 Demo - Python 版本
 用于接收来自 C++ 客户端的视频流
+支持 H.265/HEVC 解码
 
 依赖安装：
-pip install aiortc opencv-python numpy websockets
+pip install aiortc opencv-python numpy websockets av
 
 运行方式：
 python receiver_demo.py
@@ -15,7 +16,7 @@ import numpy as np
 import json
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate, VideoStreamTrack
 import websockets
-from av import VideoFrame
+from av import VideoFrame, CodecContext
 import argparse
 import logging
 
@@ -28,8 +29,9 @@ class VideoReceiver:
     def __init__(self, server_ip="0.0.0.0", server_port=50061, 
                  stun_server="106.14.31.123:3478",
                  turn_server="106.14.31.123:3478",
-                 turn_username="webrtc",
-                 turn_password="webrtc"):
+                 turn_username="rxjqr",
+                 turn_password="rxjqrTurn123",
+                 codec="h265"):
         """
         初始化视频接收器
         
@@ -40,9 +42,11 @@ class VideoReceiver:
             turn_server: TURN 服务器地址
             turn_username: TURN 用户名
             turn_password: TURN 密码
+            codec: 视频编解码器 (h264/h265/vp8/vp9)
         """
         self.server_ip = server_ip
         self.server_port = server_port
+        self.codec = codec.lower()
         
         # 配置 ICE 服务器
         self.ice_servers = [
@@ -59,9 +63,11 @@ class VideoReceiver:
         self.video_track = None
         self.frame_count = 0
         self.running = False
+        
+        logger.info(f"使用编解码器: {self.codec.upper()}")
 
     async def receive_frames(self):
-        """接收并显示视频帧"""
+        """接收并显示视频帧（支持 H.265 解码）"""
         logger.info("开始接收视频流...")
         
         try:
@@ -78,19 +84,30 @@ class VideoReceiver:
                         
                         self.frame_count += 1
                         
-                        # 添加帧计数信息
+                        # 添加帧信息
+                        codec_info = f"Codec: {self.codec.upper()}"
                         cv2.putText(
                             img, 
-                            f"Received Frame: {self.frame_count}", 
+                            codec_info,
+                            (10, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 255),
+                            2
+                        )
+                        
+                        cv2.putText(
+                            img, 
+                            f"Frame: {self.frame_count}", 
                             (10, 60), 
                             cv2.FONT_HERSHEY_SIMPLEX, 
                             0.7, 
-                            (0, 0, 255), 
+                            (0, 255, 0), 
                             2
                         )
                         
                         # 显示视频
-                        cv2.imshow('WebRTC Receiver', img)
+                        cv2.imshow(f'WebRTC Receiver ({self.codec.upper()})', img)
                         
                         # 按 'q' 退出
                         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -99,7 +116,7 @@ class VideoReceiver:
                             break
                             
                         if self.frame_count % 30 == 0:
-                            logger.info(f"已接收 {self.frame_count} 帧")
+                            logger.info(f"已接收 {self.frame_count} 帧 ({self.codec.upper()})")
                             
                     except asyncio.TimeoutError:
                         continue
@@ -242,7 +259,7 @@ class VideoReceiver:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description='WebRTC 视频流接收端')
+    parser = argparse.ArgumentParser(description='WebRTC 视频流接收端 (支持 H.265)')
     parser.add_argument('--ip', default='0.0.0.0', 
                         help='信令服务器监听 IP (default: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=50061, 
@@ -251,10 +268,13 @@ async def main():
                         help='STUN 服务器地址 (default: 106.14.31.123:3478)')
     parser.add_argument('--turn', default='106.14.31.123:3478',
                         help='TURN 服务器地址 (default: 106.14.31.123:3478)')
-    parser.add_argument('--turn-user', default='webrtc',
-                        help='TURN 用户名 (default: webrtc)')
-    parser.add_argument('--turn-pass', default='webrtc',
-                        help='TURN 密码 (default: webrtc)')
+    parser.add_argument('--turn-user', default='rxjqr',
+                        help='TURN 用户名 (default: rxjqr)')
+    parser.add_argument('--turn-pass', default='rxjqrTurn123',
+                        help='TURN 密码 (default: rxjqrTurn123)')
+    parser.add_argument('--codec', default='h265',
+                        choices=['h264', 'h265', 'vp8', 'vp9'],
+                        help='视频编解码器 (default: h265)')
     
     args = parser.parse_args()
     
@@ -264,19 +284,21 @@ async def main():
         stun_server=args.stun,
         turn_server=args.turn,
         turn_username=args.turn_user,
-        turn_password=args.turn_pass
+        turn_password=args.turn_pass,
+        codec=args.codec
     )
     
     await receiver.run()
 
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("WebRTC 视频接收端 (WebSocket)")
-    print("=" * 50)
+    print("=" * 60)
+    print("WebRTC 视频接收端 (WebSocket + H.265)")
+    print("=" * 60)
     print("\n配置信息:")
     print("- WebSocket 信令服务器: ws://0.0.0.0:50061")
     print("- STUN/TURN: 106.14.31.123:3478")
+    print("- 支持编解码器: H.264, H.265, VP8, VP9")
     print("\n等待发送端连接...")
     print("按 'q' 键退出\n")
     
