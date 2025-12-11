@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC 接收端 - Web 版</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            opacity: 0.9;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .config-panel {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .config-row {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .form-group label {
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #333;
+        }
+        
+        .form-group input {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .btn-primary:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+        
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        
+        .video-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            color: white;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+        
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #17a2b8;
+        }
+        
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+        
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+        
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        
+        .stat-value {
+            font-size: 24px;
+            font-weight: 600;
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 WebRTC 视频接收端</h1>
+            <p>基于浏览器的实时视频流接收</p>
+        </div>
+        
+        <div class="content">
+            <div class="config-panel">
+                <h3 style="margin-bottom: 15px;">连接配置</h3>
+                <div class="config-row">
+                    <div class="form-group">
+                        <label>信令服务器 IP</label>
+                        <input type="text" id="signalingIp" value="106.14.31.123">
+                    </div>
+                    <div class="form-group">
+                        <label>信令服务器端口</label>
+                        <input type="number" id="signalingPort" value="50061">
+                    </div>
+                </div>
+                
+                <div class="config-row">
+                    <div class="form-group">
+                        <label>STUN 服务器</label>
+                        <input type="text" id="stunServer" value="106.14.31.123:3478">
+                    </div>
+                    <div class="form-group">
+                        <label>TURN 服务器</label>
+                        <input type="text" id="turnServer" value="106.14.31.123:3478">
+                    </div>
+                </div>
+                
+                <div class="config-row">
+                    <div class="form-group">
+                        <label>TURN 用户名</label>
+                        <input type="text" id="turnUsername" value="webrtc">
+                    </div>
+                    <div class="form-group">
+                        <label>TURN 密码</label>
+                        <input type="password" id="turnPassword" value="webrtc">
+                    </div>
+                </div>
+                
+                <div class="btn-group">
+                    <button class="btn-primary" id="connectBtn">连接并接收视频</button>
+                    <button class="btn-danger" id="disconnectBtn" disabled>断开连接</button>
+                </div>
+            </div>
+            
+            <div id="statusDiv"></div>
+            
+            <div class="video-container" id="videoContainer" style="display: none;">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <div class="video-overlay" id="videoOverlay">
+                    <div>状态: <span id="connectionState">-</span></div>
+                    <div>ICE 状态: <span id="iceState">-</span></div>
+                </div>
+            </div>
+            
+            <div class="stats" id="statsDiv" style="display: none;">
+                <div class="stat-card">
+                    <div class="stat-label">接收帧数</div>
+                    <div class="stat-value" id="framesReceived">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">接收码率</div>
+                    <div class="stat-value" id="bitrate">0 Kbps</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">分辨率</div>
+                    <div class="stat-value" id="resolution">-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">帧率</div>
+                    <div class="stat-value" id="fps">0 fps</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let pc = null;
+        let ws = null;
+        let statsInterval = null;
+
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const statusDiv = document.getElementById('statusDiv');
+        const videoContainer = document.getElementById('videoContainer');
+        const remoteVideo = document.getElementById('remoteVideo');
+        const statsDiv = document.getElementById('statsDiv');
+
+        function showStatus(message, type = 'info') {
+            statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function updateStats() {
+            if (!pc) return;
+            
+            pc.getStats().then(stats => {
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        document.getElementById('framesReceived').textContent = report.framesReceived || 0;
+                        document.getElementById('fps').textContent = (report.framesPerSecond || 0).toFixed(1) + ' fps';
+                        
+                        if (report.bytesReceived) {
+                            const kbps = ((report.bytesReceived * 8) / 1000).toFixed(0);
+                            document.getElementById('bitrate').textContent = kbps + ' Kbps';
+                        }
+                    }
+                    
+                    if (report.type === 'track' && report.kind === 'video') {
+                        const width = report.frameWidth || 0;
+                        const height = report.frameHeight || 0;
+                        if (width && height) {
+                            document.getElementById('resolution').textContent = `${width}x${height}`;
+                        }
+                    }
+                });
+            });
+        }
+
+        async function connect() {
+            try {
+                const signalingIp = document.getElementById('signalingIp').value;
+                const signalingPort = document.getElementById('signalingPort').value;
+                const stunServer = document.getElementById('stunServer').value;
+                const turnServer = document.getElementById('turnServer').value;
+                const turnUsername = document.getElementById('turnUsername').value;
+                const turnPassword = document.getElementById('turnPassword').value;
+
+                showStatus('正在连接信令服务器...', 'info');
+                
+                // 创建 WebSocket 连接（注意：这里需要一个 WebSocket 信令服务器）
+                // 如果使用 TCP socket，需要一个 WebSocket 网关
+                ws = new WebSocket(`ws://${signalingIp}:${parseInt(signalingPort) + 1}`);
+                
+                ws.onopen = async () => {
+                    showStatus('信令连接已建立，创建 WebRTC 连接...', 'info');
+                    
+                    // 创建 PeerConnection
+                    const config = {
+                        iceServers: [
+                            { urls: `stun:${stunServer}` },
+                            {
+                                urls: `turn:${turnServer}`,
+                                username: turnUsername,
+                                credential: turnPassword
+                            }
+                        ]
+                    };
+                    
+                    pc = new RTCPeerConnection(config);
+                    
+                    // 监听远端轨道
+                    pc.ontrack = (event) => {
+                        console.log('收到远端轨道:', event.track.kind);
+                        if (event.track.kind === 'video') {
+                            remoteVideo.srcObject = event.streams[0];
+                            videoContainer.style.display = 'block';
+                            statsDiv.style.display = 'grid';
+                            showStatus('视频流已连接！', 'success');
+                            
+                            // 开始统计
+                            statsInterval = setInterval(updateStats, 1000);
+                        }
+                    };
+                    
+                    // 监听连接状态
+                    pc.onconnectionstatechange = () => {
+                        document.getElementById('connectionState').textContent = pc.connectionState;
+                        console.log('连接状态:', pc.connectionState);
+                        
+                        if (pc.connectionState === 'failed') {
+                            showStatus('WebRTC 连接失败', 'error');
+                        } else if (pc.connectionState === 'closed') {
+                            showStatus('WebRTC 连接已关闭', 'info');
+                        }
+                    };
+                    
+                    pc.oniceconnectionstatechange = () => {
+                        document.getElementById('iceState').textContent = pc.iceConnectionState;
+                        console.log('ICE 状态:', pc.iceConnectionState);
+                    };
+                    
+                    // ICE 候选
+                    pc.onicecandidate = (event) => {
+                        if (event.candidate) {
+                            ws.send(JSON.stringify({
+                                type: 'candidate',
+                                candidate: event.candidate
+                            }));
+                        }
+                    };
+                };
+                
+                ws.onmessage = async (event) => {
+                    const message = JSON.parse(event.data);
+                    
+                    if (message.type === 'offer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(message));
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        ws.send(JSON.stringify(pc.localDescription));
+                    } else if (message.type === 'candidate') {
+                        await pc.addIceCandidate(new RTCIceCandidate(message.candidate));
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    showStatus('WebSocket 连接错误: ' + error.message, 'error');
+                    console.error('WebSocket error:', error);
+                };
+                
+                ws.onclose = () => {
+                    showStatus('信令连接已关闭', 'info');
+                };
+                
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                
+            } catch (error) {
+                showStatus('连接失败: ' + error.message, 'error');
+                console.error('Connection error:', error);
+            }
+        }
+
+        function disconnect() {
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+            
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            
+            videoContainer.style.display = 'none';
+            statsDiv.style.display = 'none';
+            remoteVideo.srcObject = null;
+            
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+            
+            showStatus('已断开连接', 'info');
+        }
+
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        
+        // 页面提示
+        showStatus('⚠️ 注意: Web 版需要 WebSocket 信令服务器。建议使用 Python 版本 (receiver_demo.py) 作为接收端。', 'info');
+    </script>
+</body>
+</html>
