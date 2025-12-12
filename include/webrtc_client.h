@@ -11,24 +11,16 @@
 #include <mutex>
 #include <condition_variable>
 
-// Forward declarations for WebRTC types
-namespace rtc {
-    template<typename T> class scoped_refptr;
-}
-namespace webrtc {
-    class PeerConnectionFactoryInterface;
-    class PeerConnectionInterface;
-    class VideoTrackSourceInterface;
-    class VideoTrackInterface;
-    class DataChannelInterface;
-    class IceCandidateInterface;
-    class SessionDescriptionInterface;
-}
+// WebRTC headers
+#include "api/scoped_refptr.h"
+#include "api/peer_connection_interface.h"
+#include "api/media_stream_interface.h"
+#include "api/data_channel_interface.h"
+#include "api/jsep.h"
 
 class PeerConnectionObserver;
 class CreateSessionDescriptionObserver;
 class SetSessionDescriptionObserver;
-class H265VideoEncoder;
 class CustomVideoSource;
 
 /**
@@ -76,7 +68,7 @@ private:
     rtc::scoped_refptr<webrtc::PeerConnectionFactoryInterface> peer_connection_factory_;
     rtc::scoped_refptr<webrtc::PeerConnectionInterface> peer_connection_;
     rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track_;
-    std::shared_ptr<CustomVideoSource> custom_video_source_;
+    rtc::scoped_refptr<CustomVideoSource> custom_video_source_;
     
     // Observers
     std::shared_ptr<PeerConnectionObserver> pc_observer_;

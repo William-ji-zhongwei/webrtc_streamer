@@ -10,9 +10,8 @@ echo "Intel RealSense 完整依赖安装"
 echo "=========================================="
 echo ""
 echo "此脚本将安装："
-echo "1. Fast-CDR (RealSense 依赖)"
-echo "2. Fast-DDS (RealSense 依赖)"
-echo "3. Intel RealSense SDK"
+echo "1. Fast-CDR & Fast-DDS (RealSense 依赖)"
+echo "2. Intel RealSense SDK"
 echo ""
 read -p "按 Enter 继续或 Ctrl+C 取消..."
 
@@ -20,13 +19,9 @@ read -p "按 Enter 继续或 Ctrl+C 取消..."
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
 
-# 临时目录
-TEMP_DIR="/tmp/realsense_build"
-mkdir -p "$TEMP_DIR"
-
 echo ""
 echo "=========================================="
-echo "步骤 1/4: 安装基础依赖"
+echo "步骤 1/3: 安装基础依赖"
 echo "=========================================="
 
 sudo apt-get update
@@ -36,46 +31,21 @@ sudo apt-get install -y \
     git \
     pkg-config \
     libusb-1.0-0-dev \
-    libudev-dev \
-    libssl-dev \
-    libtinyxml2-dev \
-    libboost-all-dev
+    libudev-dev
 
 echo ""
 echo "=========================================="
-echo "步骤 2/4: 编译安装 Fast-CDR"
+echo "步骤 2/3: 安装 Fast-DDS 依赖"
 echo "=========================================="
 
-cd "$TEMP_DIR"
-if [ ! -d "Fast-CDR" ]; then
-    git clone https://github.com/eProsima/Fast-CDR.git
-fi
-cd Fast-CDR
-mkdir -p build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
-make -j$(nproc)
-sudo make install
-sudo ldconfig
+echo "安装 Fast-CDR 和 Fast-RTPS (Fast-DDS) 库..."
+sudo apt-get install -y \
+    libfastcdr-dev \
+    libfastrtps-dev
 
 echo ""
 echo "=========================================="
-echo "步骤 3/4: 编译安装 Fast-DDS"
-echo "=========================================="
-
-cd "$TEMP_DIR"
-if [ ! -d "Fast-DDS" ]; then
-    git clone https://github.com/eProsima/Fast-DDS.git
-fi
-cd Fast-DDS
-mkdir -p build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
-make -j$(nproc)
-sudo make install
-sudo ldconfig
-
-echo ""
-echo "=========================================="
-echo "步骤 4/4: 安装 Intel RealSense SDK"
+echo "步骤 3/3: 安装 Intel RealSense SDK"
 echo "=========================================="
 
 # 添加 RealSense 仓库
@@ -100,10 +70,10 @@ echo "验证安装："
 echo "-------------------"
 
 echo -n "Fast-CDR: "
-pkg-config --modversion fastcdr 2>/dev/null || echo "未找到 (可能安装在 /usr/local)"
+pkg-config --modversion fastcdr 2>/dev/null || echo "已安装 (无 pkg-config)"
 
 echo -n "Fast-RTPS: "
-pkg-config --modversion fastrtps 2>/dev/null || echo "未找到 (可能安装在 /usr/local)"
+pkg-config --modversion fastrtps 2>/dev/null || echo "已安装 (无 pkg-config)"
 
 echo -n "RealSense: "
 pkg-config --modversion realsense2 2>/dev/null || echo "未找到"
@@ -115,10 +85,6 @@ if command -v rs-enumerate-devices &> /dev/null; then
 else
     echo "rs-enumerate-devices 工具未找到"
 fi
-
-echo ""
-echo "清理临时文件..."
-rm -rf "$TEMP_DIR"
 
 echo ""
 echo "=========================================="

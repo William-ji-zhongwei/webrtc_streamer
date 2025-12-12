@@ -20,7 +20,7 @@ void signalHandler(int signal) {
 void printUsage(const char* program_name) {
     std::cout << "Usage: " << program_name << " [options]" << std::endl;
     std::cout << "\nOptions:" << std::endl;
-    std::cout << "  --config <file>       配置文件路径 (default: config.json)" << std::endl;
+    std::cout << "  --config <file>       配置文件路径 (default: config/config.json)" << std::endl;
     std::cout << "  --create-config       创建默认配置文件并退出" << std::endl;
     std::cout << "  --source <type>       视频源类型: realsense|camera|file|rtsp" << std::endl;
     std::cout << "  --device <id>         相机设备 ID (for camera source)" << std::endl;
@@ -34,7 +34,7 @@ void printUsage(const char* program_name) {
     std::cout << "  --help                显示帮助信息" << std::endl;
     std::cout << "\n说明:" << std::endl;
     std::cout << "  - 命令行参数会覆盖配置文件中的设置" << std::endl;
-    std::cout << "  - STUN/TURN 服务器配置请编辑 config.json 文件" << std::endl;
+    std::cout << "  - STUN/TURN 服务器配置请编辑 config/config.json 文件" << std::endl;
     std::cout << "\nExamples:" << std::endl;
     std::cout << "  " << program_name << " --config my_config.json" << std::endl;
     std::cout << "  " << program_name << " --create-config" << std::endl;
@@ -49,7 +49,7 @@ int main(int argc, char* argv[]) {
 
     // Configuration
     ConfigParser config_parser;
-    std::string config_file = "config.json";
+    std::string config_file = "config/config.json";
     bool use_config_file = true;
     
     // Parse command line arguments (first pass - check for config file and create-config)
@@ -60,7 +60,7 @@ int main(int argc, char* argv[]) {
             printUsage(argv[0]);
             return 0;
         } else if (arg == "--create-config") {
-            std::string output_file = "config.json";
+            std::string output_file = "config/config.json";
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 output_file = argv[++i];
             }

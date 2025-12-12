@@ -12,6 +12,9 @@ void CustomVideoSource::PushFrame(const cv::Mat& frame) {
         return;
     }
     
+    static int frame_counter = 0;
+    frame_counter++;
+    
     int width = frame.cols;
     int height = frame.rows;
     
@@ -53,4 +56,9 @@ void CustomVideoSource::PushFrame(const cv::Mat& frame) {
     
     // Push to WebRTC
     OnFrame(video_frame);
+    
+    // Log every 30 frames
+    if (frame_counter % 30 == 0) {
+        std::cout << "📺 Pushed " << frame_counter << " frames to WebRTC" << std::endl;
+    }
 }

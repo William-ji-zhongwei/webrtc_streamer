@@ -67,6 +67,21 @@ else
     DEPS_OK=false
 fi
 
+# WebRTC (检查预编译库)
+WEBRTC_ROOT="${WEBRTC_ROOT_DIR:-/opt/webrtc}"
+if [ -d "$WEBRTC_ROOT" ]; then
+    if [ -d "$WEBRTC_ROOT/include" ] || [ -d "$WEBRTC_ROOT/src" ]; then
+        echo "✓ WebRTC: $WEBRTC_ROOT"
+    else
+        echo "⚠ WebRTC: 目录存在但结构不完整"
+        echo "  请运行: sudo ./scripts/install_webrtc.sh"
+    fi
+else
+    echo "✗ WebRTC: 未找到 ($WEBRTC_ROOT)"
+    echo "  请运行: sudo ./scripts/install_webrtc.sh"
+    DEPS_OK=false
+fi
+
 # RealSense (可选，如果不使用可以跳过)
 if pkg-config --exists realsense2 2>/dev/null; then
     check_dependency "RealSense" "realsense2"
@@ -78,7 +93,7 @@ echo ""
 
 if [ "$DEPS_OK" = false ]; then
     echo "错误: 缺少必要的依赖"
-    echo "请先运行: ./scripts/setup.sh"
+    echo "请先运行: ./scripts/setup_all.sh"
     exit 1
 fi
 
@@ -119,9 +134,3 @@ echo "1. 查看使用帮助: ./build/webrtc_streamer --help"
 echo "2. 运行程序: ./scripts/run.sh"
 echo "3. 或直接运行: ./build/webrtc_streamer [选项]"
 echo ""
-
-# 创建符号链接（方便使用）
-if [ -f "$BUILD_DIR/webrtc_streamer" ]; then
-    ln -sf "$BUILD_DIR/webrtc_streamer" "$PROJECT_ROOT/webrtc_streamer"
-    echo "已创建符号链接: $PROJECT_ROOT/webrtc_streamer -> build/webrtc_streamer"
-fi

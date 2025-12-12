@@ -1,37 +1,152 @@
 #include "webrtc_client.h"
+#include "custom_video_source.h"
+#include "simple_video_codec_factory.h"
 #include <iostream>
-#include <chrono>
-#include <iomanip>
 #include <sstream>
+#include <iomanip>
+#include <cstring>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <cstring>
 
-// Simple WebSocket frame encoding
+// WebRTC headers
+#include <api/create_peerconnection_factory.h>
+#include <api/audio_codecs/builtin_audio_decoder_factory.h>
+#include <api/audio_codecs/builtin_audio_encoder_factory.h>
+#include <api/video_codecs/builtin_video_decoder_factory.h>
+#include <api/video_codecs/builtin_video_encoder_factory.h>
+#include <api/peer_connection_interface.h>
+#include <rtc_base/ssl_adapter.h>
+#include <rtc_base/thread.h>
+#include <rtc_base/logging.h>
+#include <pc/video_track_source.h>
+
+// Observer classes
+class PeerConnectionObserver : public webrtc::PeerConnectionObserver {
+public:
+    explicit PeerConnectionObserver(WebRTCClient* client) : client_(client) {}
+    
+    void OnSignalingChange(webrtc::PeerConnectionInterface::SignalingState new_state) override {
+        RTC_LOG(LS_INFO) << "Signaling state: " << new_state;
+    }
+    
+    void OnDataChannel(rtc::scoped_refptr<webrtc::DataChannelInterface> channel) override {
+        RTC_LOG(LS_INFO) << "Data channel created";
+    }
+    
+    void OnRenegotiationNeeded() override {
+        RTC_LOG(LS_INFO) << "Renegotiation needed";
+    }
+    
+    void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) override {
+        RTC_LOG(LS_INFO) << "ICE connection state: " << new_state;
+        if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected) {
+            client_->OnConnectionChange(true);
+        } else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
+                   new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
+            client_->OnConnectionChange(false);
+        }
+    }
+    
+    void OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState new_state) override {
+        RTC_LOG(LS_INFO) << "ICE gathering state: " << new_state;
+    }
+    
+    void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override {
+        client_->OnIceCandidate(candidate);
+    }
+    
+    void OnTrack(rtc::scoped_refptr<webrtc::RtpTransceiverInterface> transceiver) override {
+        RTC_LOG(LS_INFO) << "Track added";
+    }
+    
+private:
+    WebRTCClient* client_;
+};
+
+class CreateSessionDescriptionObserver : public webrtc::CreateSessionDescriptionObserver {
+public:
+    explicit CreateSessionDescriptionObserver(WebRTCClient* client) : client_(client) {}
+    
+    void OnSuccess(webrtc::SessionDescriptionInterface* desc) override {
+        client_->OnOfferCreated(desc);
+    }
+    
+    void OnFailure(webrtc::RTCError error) override {
+        RTC_LOG(LS_ERROR) << "Create session description failed: " << error.message();
+    }
+    
+private:
+    WebRTCClient* client_;
+};
+
+class SetSessionDescriptionObserver : public webrtc::SetSessionDescriptionObserver {
+public:
+    explicit SetSessionDescriptionObserver(WebRTCClient* client) : client_(client) {}
+    
+    void OnSuccess() override {
+        client_->OnAnswerSet();
+    }
+    
+    void OnFailure(webrtc::RTCError error) override {
+        RTC_LOG(LS_ERROR) << "Set session description failed: " << error.message();
+    }
+    
+private:
+    WebRTCClient* client_;
+};
+
+// Helper to escape JSON strings
+std::string escapeJsonString(const std::string& input) {
+    std::ostringstream ss;
+    for (char c : input) {
+        switch (c) {
+            case '"': ss << "\\\""; break;
+            case '\\': ss << "\\\\"; break;
+            case '\b': ss << "\\b"; break;
+            case '\f': ss << "\\f"; break;
+            case '\n': ss << "\\n"; break;
+            case '\r': ss << "\\r"; break;
+            case '\t': ss << "\\t"; break;
+            default:
+                if ('\x00' <= c && c <= '\x1f') {
+                    ss << "\\u" << std::hex << std::setw(4) << std::setfill('0') << (int)c;
+                } else {
+                    ss << c;
+                }
+        }
+    }
+    return ss.str();
+}
+
+// WebSocket helper functions
 std::string encodeWebSocketFrame(const std::string& message) {
     std::string frame;
     size_t length = message.length();
     
-    // FIN bit + text frame
-    frame.push_back(0x81);
+    frame.push_back(0x81);  // FIN bit + text frame
     
-    // Payload length
     if (length <= 125) {
-        frame.push_back(static_cast<char>(length));
+        frame.push_back(static_cast<char>(length | 0x80));  // Masked
     } else if (length <= 65535) {
-        frame.push_back(126);
+        frame.push_back(126 | 0x80);
         frame.push_back((length >> 8) & 0xFF);
         frame.push_back(length & 0xFF);
     }
     
-    // Payload
-    frame.append(message);
+    // Masking key (simplified - should be random)
+    char mask[4] = {0x12, 0x34, 0x56, 0x78};
+    frame.append(mask, 4);
+    
+    // Apply mask to payload
+    for (size_t i = 0; i < length; i++) {
+        frame.push_back(message[i] ^ mask[i % 4]);
+    }
+    
     return frame;
 }
 
-// Simple WebSocket frame decoding
 std::string decodeWebSocketFrame(const char* data, size_t len) {
     if (len < 2) return "";
     
@@ -45,34 +160,17 @@ std::string decodeWebSocketFrame(const char* data, size_t len) {
         pos = 4;
     }
     
-    // Check if masked (from client)
-    bool masked = (data[1] & 0x80) != 0;
-    char mask[4] = {0};
-    
-    if (masked) {
-        if (len < pos + 4) return "";
-        memcpy(mask, data + pos, 4);
-        pos += 4;
-    }
-    
     if (len < pos + payload_len) return "";
     
-    std::string payload;
-    for (size_t i = 0; i < payload_len; i++) {
-        char c = data[pos + i];
-        if (masked) {
-            c ^= mask[i % 4];
-        }
-        payload.push_back(c);
-    }
-    
-    return payload;
+    return std::string(data + pos, payload_len);
 }
 
+// WebRTCClient implementation
 WebRTCClient::WebRTCClient(std::shared_ptr<VideoSource> video_source,
                            const WebRTCConfig& webrtc_config)
     : video_source_(video_source), webrtc_config_(webrtc_config),
-      is_streaming_(false), should_stop_(false), frame_count_(0) {
+      is_streaming_(false), should_stop_(false), peer_connected_(false),
+      ws_socket_(-1), frame_count_(0) {
 }
 
 WebRTCClient::~WebRTCClient() {
@@ -85,45 +183,182 @@ bool WebRTCClient::initialize() {
         return false;
     }
     
-    std::cout << "WebRTC client initialized" << std::endl;
-    std::cout << "Server: " << webrtc_config_.server_ip << ":" << webrtc_config_.server_port << std::endl;
-    std::cout << "Video source: " << video_source_->getName() << std::endl;
+    std::cout << "Initializing WebRTC client..." << std::endl;
     
-    std::cout << "\nICE Servers configuration:" << std::endl;
-    for (size_t i = 0; i < webrtc_config_.ice_servers.size(); i++) {
-        const auto& ice = webrtc_config_.ice_servers[i];
-        std::cout << "  [" << i + 1 << "] ";
-        for (size_t j = 0; j < ice.urls.size(); j++) {
-            std::cout << ice.urls[j];
-            if (j < ice.urls.size() - 1) std::cout << ", ";
-        }
-        if (!ice.username.empty()) {
-            std::cout << " (authenticated)";
-        }
-        std::cout << std::endl;
+    // Initialize SSL
+    rtc::InitializeSSL();
+    
+    // Create threads
+    std::unique_ptr<rtc::Thread> network_thread = rtc::Thread::CreateWithSocketServer();
+    std::unique_ptr<rtc::Thread> worker_thread = rtc::Thread::Create();
+    std::unique_ptr<rtc::Thread> signaling_thread = rtc::Thread::Create();
+    
+    network_thread->Start();
+    worker_thread->Start();
+    signaling_thread->Start();
+    
+    // Create PeerConnectionFactory
+    peer_connection_factory_ = webrtc::CreatePeerConnectionFactory(
+        network_thread.get(),
+        worker_thread.get(),
+        signaling_thread.get(),
+        nullptr,
+        webrtc::CreateBuiltinAudioEncoderFactory(),
+        webrtc::CreateBuiltinAudioDecoderFactory(),
+        std::make_unique<webrtc::SimpleVideoEncoderFactory>(),
+        std::make_unique<webrtc::SimpleVideoDecoderFactory>(),
+        nullptr, nullptr
+    );
+    
+    if (!peer_connection_factory_) {
+        std::cerr << "Failed to create PeerConnectionFactory" << std::endl;
+        return false;
     }
-    std::cout << std::endl;
+    
+    std::cout << "✅ WebRTC initialized successfully" << std::endl;
+    
+    // Keep threads alive
+    network_thread.release();
+    worker_thread.release();
+    signaling_thread.release();
     
     return true;
 }
 
+bool WebRTCClient::createPeerConnection() {
+    webrtc::PeerConnectionInterface::RTCConfiguration config;
+    
+    // Add ICE servers
+    for (const auto& ice_server : webrtc_config_.ice_servers) {
+        webrtc::PeerConnectionInterface::IceServer server;
+        server.urls = ice_server.urls;
+        
+        if (!ice_server.username.empty()) {
+            server.username = ice_server.username;
+            server.password = ice_server.credential;
+        }
+        
+        config.servers.push_back(server);
+    }
+    
+    // Create observer
+    pc_observer_ = std::make_shared<PeerConnectionObserver>(this);
+    
+    // Create PeerConnection
+    peer_connection_ = peer_connection_factory_->CreatePeerConnection(
+        config, nullptr, nullptr, pc_observer_.get()
+    );
+    
+    if (!peer_connection_) {
+        std::cerr << "Failed to create PeerConnection" << std::endl;
+        return false;
+    }
+    
+    std::cout << "✅ PeerConnection created" << std::endl;
+    return true;
+}
+
+bool WebRTCClient::addVideoTrack() {
+    // Create custom video source
+    custom_video_source_ = new rtc::RefCountedObject<CustomVideoSource>();
+    
+    // Create video track
+    rtc::scoped_refptr<webrtc::VideoTrackInterface> video_track =
+        peer_connection_factory_->CreateVideoTrack(
+            "video_track", 
+            custom_video_source_.get()
+        );
+    
+    if (!video_track) {
+        std::cerr << "Failed to create video track" << std::endl;
+        return false;
+    }
+    
+    // Add track to peer connection
+    auto result = peer_connection_->AddTrack(video_track, {"stream_id"});
+    if (!result.ok()) {
+        std::cerr << "Failed to add track: " << result.error().message() << std::endl;
+        return false;
+    }
+    
+    video_track_ = video_track;
+    std::cout << "✅ Video track added" << std::endl;
+    
+    return true;
+}
+
+void WebRTCClient::createOffer() {
+    webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
+    options.offer_to_receive_video = false;
+    options.offer_to_receive_audio = false;
+    
+    rtc::scoped_refptr<CreateSessionDescriptionObserver> observer(
+        new rtc::RefCountedObject<CreateSessionDescriptionObserver>(this)
+    );
+    
+    peer_connection_->CreateOffer(observer.get(), options);
+}
+
+void WebRTCClient::OnOfferCreated(webrtc::SessionDescriptionInterface* desc) {
+    // Set local description
+    rtc::scoped_refptr<SetSessionDescriptionObserver> observer(
+        new rtc::RefCountedObject<SetSessionDescriptionObserver>(this)
+    );
+    
+    peer_connection_->SetLocalDescription(observer.get(), desc);
+    
+    // Send offer via WebSocket
+    std::string sdp;
+    desc->ToString(&sdp);
+    
+    std::ostringstream json;
+    json << "{\"type\":\"offer\",\"sdp\":\"" << escapeJsonString(sdp) << "\"}";
+    
+    sendMessage(json.str());
+    std::cout << "📤 Offer sent" << std::endl;
+}
+
+void WebRTCClient::OnAnswerSet() {
+    std::cout << "✅ Answer set successfully" << std::endl;
+}
+
+void WebRTCClient::OnIceCandidate(const webrtc::IceCandidateInterface* candidate) {
+    std::string sdp;
+    candidate->ToString(&sdp);
+    
+    std::ostringstream json;
+    json << "{\"type\":\"candidate\",\"candidate\":{"
+         << "\"candidate\":\"" << escapeJsonString(sdp) << "\","
+         << "\"sdpMid\":\"" << escapeJsonString(candidate->sdp_mid()) << "\","
+         << "\"sdpMLineIndex\":" << candidate->sdp_mline_index()
+         << "}}";
+    
+    sendMessage(json.str());
+    RTC_LOG(LS_INFO) << "ICE candidate sent";
+}
+
+void WebRTCClient::OnConnectionChange(bool connected) {
+    peer_connected_ = connected;
+    if (connected) {
+        std::cout << "✅ WebRTC peer connected!" << std::endl;
+    } else {
+        std::cout << "⚠️  WebRTC peer disconnected" << std::endl;
+    }
+}
+
 bool WebRTCClient::start() {
     if (is_streaming_) {
-        std::cerr << "Already streaming" << std::endl;
         return false;
     }
     
     should_stop_ = false;
     is_streaming_ = true;
-    frame_count_ = 0;
     
-    // Start streaming thread
-    streaming_thread_ = std::thread(&WebRTCClient::streamingThread, this);
-    
-    // Start signaling thread (for WebRTC handshake)
+    // Start threads
     signaling_thread_ = std::thread(&WebRTCClient::signalingThread, this);
+    streaming_thread_ = std::thread(&WebRTCClient::captureAndEncodeFrames, this);
     
-    std::cout << "Streaming started" << std::endl;
+    std::cout << "🚀 Streaming started" << std::endl;
     return true;
 }
 
@@ -134,225 +369,207 @@ void WebRTCClient::stop() {
     
     should_stop_ = true;
     is_streaming_ = false;
-    
-    // Wake up threads
     queue_cv_.notify_all();
-    
-    // Wait for threads to finish
-    if (streaming_thread_.joinable()) {
-        streaming_thread_.join();
-    }
     
     if (signaling_thread_.joinable()) {
         signaling_thread_.join();
     }
     
-    // Clear frame queue
-    std::lock_guard<std::mutex> lock(queue_mutex_);
-    while (!frame_queue_.empty()) {
-        frame_queue_.pop();
+    if (streaming_thread_.joinable()) {
+        streaming_thread_.join();
     }
     
-    std::cout << "Streaming stopped. Total frames: " << frame_count_ << std::endl;
+    if (peer_connection_) {
+        peer_connection_->Close();
+        peer_connection_ = nullptr;
+    }
+    
+    if (ws_socket_ >= 0) {
+        close(ws_socket_);
+        ws_socket_ = -1;
+    }
+    
+    rtc::CleanupSSL();
+    
+    std::cout << "Streaming stopped" << std::endl;
 }
 
-void WebRTCClient::streamingThread() {
-    auto frame_duration = std::chrono::milliseconds(1000 / video_source_->getFrameRate());
+void WebRTCClient::captureAndEncodeFrames() {
+    std::cout << "Capture thread started" << std::endl;
+    
+    auto frame_duration = std::chrono::milliseconds(33);  // ~30 fps
     auto next_frame_time = std::chrono::steady_clock::now();
     
     while (!should_stop_) {
         cv::Mat frame;
-        
-        // Get frame from video source
-        if (!video_source_->getFrame(frame)) {
-            std::cerr << "Failed to get frame from video source" << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            continue;
-        }
-        
-        // Add timestamp overlay
-        auto now = std::chrono::system_clock::now();
-        auto now_c = std::chrono::system_clock::to_time_t(now);
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()) % 1000;
-        
-        std::ostringstream oss;
-        oss << std::put_time(std::localtime(&now_c), "%Y-%m-%d %H:%M:%S")
-            << "." << std::setfill('0') << std::setw(3) << ms.count();
-        
-        cv::putText(frame, oss.str(), cv::Point(10, 30),
-                   cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
-        
-        // Add to queue for encoding/transmission
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            if (frame_queue_.size() >= MAX_QUEUE_SIZE) {
-                frame_queue_.pop(); // Drop oldest frame if queue is full
+        if (video_source_->getFrame(frame) && !frame.empty()) {
+            frame_count_++;
+            
+            // Add timestamp
+            auto now = std::chrono::system_clock::now();
+            auto time_t_now = std::chrono::system_clock::to_time_t(now);
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now.time_since_epoch()) % 1000;
+            
+            char timestamp[100];
+            std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", 
+                         std::localtime(&time_t_now));
+            sprintf(timestamp + strlen(timestamp), ".%03d", static_cast<int>(ms.count()));
+            
+            cv::putText(frame, timestamp, cv::Point(10, 30),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
+            
+            // Push to WebRTC video source
+            if (custom_video_source_) {
+                custom_video_source_->PushFrame(frame);
             }
-            frame_queue_.push(frame.clone());
-        }
-        queue_cv_.notify_one();
-        
-        frame_count_++;
-        if (frame_count_ % 30 == 0) {
-            std::cout << "Sent frame " << frame_count_ << std::endl;
+            
+            if (frame_count_ % 30 == 0) {
+                std::cout << "📹 Captured " << frame_count_ << " frames" << std::endl;
+            }
         }
         
-        // Maintain frame rate
         next_frame_time += frame_duration;
         std::this_thread::sleep_until(next_frame_time);
     }
+    
+    std::cout << "Capture thread stopped" << std::endl;
 }
 
-void WebRTCClient::signalingThread() {
-    std::cout << "WebSocket 信令线程已启动" << std::endl;
+void WebRTCClient::sendMessage(const std::string& message) {
+    std::lock_guard<std::mutex> lock(ws_mutex_);
     
-    // 创建 socket
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        std::cerr << "创建 socket 失败" << std::endl;
+    if (ws_socket_ < 0) {
         return;
     }
     
-    // 连接到 WebSocket 服务器
+    std::string frame = encodeWebSocketFrame(message);
+    send(ws_socket_, frame.c_str(), frame.length(), 0);
+}
+
+std::string WebRTCClient::receiveMessage() {
+    char buffer[8192];
+    ssize_t bytes = recv(ws_socket_, buffer, sizeof(buffer), 0);
+    
+    if (bytes <= 0) {
+        return "";
+    }
+    
+    return decodeWebSocketFrame(buffer, bytes);
+}
+
+void WebRTCClient::signalingThread() {
+    std::cout << "Signaling thread started" << std::endl;
+    
+    // Connect to WebSocket server
+    ws_socket_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (ws_socket_ < 0) {
+        std::cerr << "Failed to create socket" << std::endl;
+        return;
+    }
+    
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(webrtc_config_.server_port);
+    inet_pton(AF_INET, webrtc_config_.server_ip.c_str(), &server_addr.sin_addr);
     
-    if (inet_pton(AF_INET, webrtc_config_.server_ip.c_str(), &server_addr.sin_addr) <= 0) {
-        std::cerr << "无效的服务器地址: " << webrtc_config_.server_ip << std::endl;
-        close(sock);
+    std::cout << "Connecting to " << webrtc_config_.server_ip 
+              << ":" << webrtc_config_.server_port << "..." << std::endl;
+    
+    if (connect(ws_socket_, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        std::cerr << "Failed to connect: " << strerror(errno) << std::endl;
+        close(ws_socket_);
+        ws_socket_ = -1;
         return;
     }
     
-    std::cout << "正在连接到 WebSocket 服务器 " 
-              << webrtc_config_.server_ip << ":" 
-              << webrtc_config_.server_port << "..." << std::endl;
-    
-    if (connect(sock, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-        std::cerr << "连接失败: " << strerror(errno) << std::endl;
-        close(sock);
-        return;
-    }
-    
-    std::cout << "TCP 连接已建立" << std::endl;
-    
-    // 发送 WebSocket 握手请求
+    // WebSocket handshake
     std::ostringstream handshake;
     handshake << "GET / HTTP/1.1\r\n"
-              << "Host: " << webrtc_config_.server_ip << ":" << webrtc_config_.server_port << "\r\n"
+              << "Host: " << webrtc_config_.server_ip << "\r\n"
               << "Upgrade: websocket\r\n"
               << "Connection: Upgrade\r\n"
               << "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-              << "Sec-WebSocket-Version: 13\r\n"
-              << "\r\n";
+              << "Sec-WebSocket-Version: 13\r\n\r\n";
     
-    std::string handshake_str = handshake.str();
-    if (send(sock, handshake_str.c_str(), handshake_str.length(), 0) < 0) {
-        std::cerr << "发送握手失败" << std::endl;
-        close(sock);
-        return;
-    }
+    send(ws_socket_, handshake.str().c_str(), handshake.str().length(), 0);
     
-    // 接收握手响应
+    // Receive handshake response
     char buffer[4096];
-    ssize_t bytes_received = recv(sock, buffer, sizeof(buffer) - 1, 0);
-    if (bytes_received < 0) {
-        std::cerr << "接收握手响应失败" << std::endl;
-        close(sock);
+    recv(ws_socket_, buffer, sizeof(buffer), 0);
+    
+    std::cout << "✅ WebSocket connected" << std::endl;
+    
+    // Create PeerConnection and add video track
+    if (!createPeerConnection() || !addVideoTrack()) {
         return;
     }
     
-    buffer[bytes_received] = '\0';
-    std::string response(buffer);
+    // Create and send offer
+    createOffer();
     
-    if (response.find("101 Switching Protocols") == std::string::npos) {
-        std::cerr << "WebSocket 握手失败" << std::endl;
-        std::cerr << "响应: " << response << std::endl;
-        close(sock);
-        return;
-    }
-    
-    std::cout << "✅ WebSocket 连接已建立" << std::endl;
-    
-    // 创建并发送 offer (简化版本 - 实际需要使用 WebRTC API)
-    std::ostringstream offer_json;
-    offer_json << "{"
-               << "\"type\":\"offer\","
-               << "\"sdp\":\"v=0\\r\\n"
-               << "o=- 0 0 IN IP4 127.0.0.1\\r\\n"
-               << "s=WebRTC Stream\\r\\n"
-               << "t=0 0\\r\\n"
-               << "m=video 9 UDP/TLS/RTP/SAVPF 96\\r\\n"
-               << "c=IN IP4 0.0.0.0\\r\\n"
-               << "a=rtcp:9 IN IP4 0.0.0.0\\r\\n";
-    
-    // 添加 ICE 服务器信息
-    for (const auto& ice_server : webrtc_config_.ice_servers) {
-        for (const auto& url : ice_server.urls) {
-            offer_json << "a=ice-server:" << url << "\\r\\n";
-        }
-    }
-    
-    offer_json << "\""
-               << "}";
-    
-    std::string offer_message = offer_json.str();
-    std::string ws_frame = encodeWebSocketFrame(offer_message);
-    
-    std::cout << "发送 offer..." << std::endl;
-    if (send(sock, ws_frame.c_str(), ws_frame.length(), 0) < 0) {
-        std::cerr << "发送 offer 失败" << std::endl;
-        close(sock);
-        return;
-    }
-    
-    std::cout << "等待 answer..." << std::endl;
-    
-    // 接收 answer 和其他消息
+    // Receive messages
     while (!should_stop_) {
-        bytes_received = recv(sock, buffer, sizeof(buffer), 0);
-        if (bytes_received <= 0) {
-            if (bytes_received == 0) {
-                std::cout << "服务器关闭了连接" << std::endl;
-            } else {
-                std::cerr << "接收数据失败: " << strerror(errno) << std::endl;
-            }
-            break;
+        std::string message = receiveMessage();
+        
+        if (message.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
         }
         
-        // 解码 WebSocket 帧
-        std::string message = decodeWebSocketFrame(buffer, bytes_received);
-        if (!message.empty()) {
-            std::cout << "收到消息: " << message.substr(0, 100);
-            if (message.length() > 100) std::cout << "...";
-            std::cout << std::endl;
+        std::cout << "Received message: " << message << std::endl;
+
+        // Parse JSON (simplified)
+        if (message.find("\"type\"") != std::string::npos && 
+            message.find("answer") != std::string::npos) {
             
-            // 解析 JSON (简化版本)
-            if (message.find("\"type\":\"answer\"") != std::string::npos) {
-                std::cout << "✅ 收到 answer，WebRTC 连接建立中..." << std::endl;
-            } else if (message.find("\"type\":\"candidate\"") != std::string::npos) {
-                std::cout << "收到 ICE candidate" << std::endl;
+            // Extract SDP
+            size_t sdp_key_pos = message.find("\"sdp\"");
+            if (sdp_key_pos == std::string::npos) continue;
+            
+            size_t sdp_start_quote = message.find("\"", sdp_key_pos + 5); // Skip "sdp"
+            if (sdp_start_quote == std::string::npos) continue;
+            
+            size_t sdp_end_quote = message.find("\"", sdp_start_quote + 1);
+            while (sdp_end_quote != std::string::npos && message[sdp_end_quote-1] == '\\') {
+                 // Skip escaped quotes if any (though SDP usually doesn't have quotes inside)
+                 sdp_end_quote = message.find("\"", sdp_end_quote + 1);
             }
-        }
-        
-        // 处理帧队列 (发送视频)
-        cv::Mat frame;
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            if (!frame_queue_.empty()) {
-                frame = frame_queue_.front();
-                frame_queue_.pop();
+            if (sdp_end_quote == std::string::npos) continue;
+            
+            std::string sdp = message.substr(sdp_start_quote + 1, sdp_end_quote - sdp_start_quote - 1);
+            
+            // Unescape newlines
+            std::string unescaped_sdp;
+            for (size_t i = 0; i < sdp.length(); ++i) {
+                if (sdp[i] == '\\' && i + 1 < sdp.length()) {
+                    if (sdp[i+1] == 'r') { unescaped_sdp += '\r'; i++; }
+                    else if (sdp[i+1] == 'n') { unescaped_sdp += '\n'; i++; }
+                    else { unescaped_sdp += sdp[i]; }
+                } else {
+                    unescaped_sdp += sdp[i];
+                }
             }
-        }
-        
-        if (!frame.empty()) {
-            // 在真实实现中，这里应该编码并通过 WebRTC 发送帧
-            // 现在只是模拟
+            
+            // Create answer
+            webrtc::SdpParseError error;
+            std::unique_ptr<webrtc::SessionDescriptionInterface> answer =
+                webrtc::CreateSessionDescription(webrtc::SdpType::kAnswer, unescaped_sdp, &error);
+            
+            if (answer) {
+                std::string answer_sdp;
+                answer->ToString(&answer_sdp);
+                std::cout << "📥 Answer SDP:\n" << answer_sdp << std::endl;
+
+                rtc::scoped_refptr<SetSessionDescriptionObserver> observer(
+                    new rtc::RefCountedObject<SetSessionDescriptionObserver>(this)
+                );
+                peer_connection_->SetRemoteDescription(observer.get(), answer.release());
+                std::cout << "📥 Answer received and set" << std::endl;
+            }
         }
     }
     
-    close(sock);
-    std::cout << "WebSocket 信令线程已停止" << std::endl;
+    std::cout << "Signaling thread stopped" << std::endl;
 }

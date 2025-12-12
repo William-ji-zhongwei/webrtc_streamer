@@ -8,10 +8,6 @@ echo "=========================================="
 echo "安装 WebRTC 和 H.265 编解码器依赖"
 echo "=========================================="
 
-# 更新包列表
-echo "📦 更新包列表..."
-sudo apt-get update
-
 # 安装基础编译工具
 echo "🔧 安装编译工具..."
 sudo apt-get install -y \
@@ -53,38 +49,19 @@ sudo apt-get install -y \
 echo "🛠️  安装 depot_tools..."
 DEPOT_TOOLS_DIR="$HOME/depot_tools"
 if [ ! -d "$DEPOT_TOOLS_DIR" ]; then
-    git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS_DIR"
+    # 尝试 GitHub 代理
+    if git clone https://ghproxy.com/https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS_DIR" 2>/dev/null; then
+        echo "✅ 从 GitHub 代理克隆成功"
+    # 原始源
+    else
+        echo "从官方源克隆..."
+        git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git "$DEPOT_TOOLS_DIR"
+    fi
     echo "export PATH=\$PATH:$DEPOT_TOOLS_DIR" >> ~/.bashrc
     export PATH=$PATH:$DEPOT_TOOLS_DIR
 else
     echo "depot_tools 已存在"
 fi
-
-# 可选：编译 WebRTC (这需要很长时间和大量磁盘空间)
-echo ""
-echo "=========================================="
-echo "WebRTC 编译说明"
-echo "=========================================="
-echo ""
-echo "如果需要完整的 WebRTC 原生 API，请运行以下命令："
-echo ""
-echo "  mkdir -p ~/webrtc"
-echo "  cd ~/webrtc"
-echo "  fetch --nohooks webrtc"
-echo "  cd src"
-echo "  gclient sync"
-echo "  gn gen out/Default --args='is_debug=false'"
-echo "  ninja -C out/Default"
-echo ""
-echo "注意：WebRTC 编译需要："
-echo "  - 至少 16GB RAM"
-echo "  - 至少 30GB 磁盘空间"
-echo "  - 2-4 小时编译时间"
-echo ""
-echo "或者使用预编译的 WebRTC 库："
-echo "  - 下载: https://webrtc.googlesource.com/src"
-echo "  - 或使用 Docker: webrtc/build"
-echo ""
 
 # 安装 Python 依赖 (接收端)
 echo "🐍 安装 Python 依赖..."
@@ -99,9 +76,4 @@ echo ""
 echo "=========================================="
 echo "✅ 依赖安装完成！"
 echo "=========================================="
-echo ""
-echo "下一步："
-echo "1. 如果需要完整 WebRTC，按照上述说明编译"
-echo "2. 或者使用简化版本 (不需要完整 WebRTC)"
-echo "3. 构建项目: ./scripts/build.sh"
 echo ""

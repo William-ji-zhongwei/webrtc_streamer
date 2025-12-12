@@ -29,7 +29,3 @@ venv/
 
 # Generated files
 webrtc_streamer
-
-# Config files (keep example)
-config.json
-!config.example.json

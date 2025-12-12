@@ -33,7 +33,7 @@ case $choice in
         
         echo ""
         echo "当前配置："
-        cat "$PROJECT_ROOT/config.json" | grep -A 3 "server"
+        cat "$PROJECT_ROOT/config/config.json" | grep -A 3 "server"
         echo ""
         
         read -p "使用此配置启动? (y/n): " confirm
@@ -95,9 +95,9 @@ case $choice in
         echo "当前配置"
         echo "=========================================="
         echo ""
-        cat "$PROJECT_ROOT/config.json"
+        cat "$PROJECT_ROOT/config/config.json"
         echo ""
-        echo "配置文件位置: $PROJECT_ROOT/config.json"
+        echo "配置文件位置: $PROJECT_ROOT/config/config.json"
         echo "使用编辑器修改后重新运行即可"
         ;;
         
@@ -107,8 +107,8 @@ case $choice in
         echo "网络连通性测试"
         echo "=========================================="
         
-        SERVER_IP=$(cat "$PROJECT_ROOT/config.json" | grep '"ip"' | head -1 | cut -d'"' -f4)
-        SERVER_PORT=$(cat "$PROJECT_ROOT/config.json" | grep '"port"' | head -1 | cut -d':' -f2 | tr -d ' ,')
+        SERVER_IP=$(cat "$PROJECT_ROOT/config/config.json" | grep '"ip"' | head -1 | cut -d'"' -f4)
+        SERVER_PORT=$(cat "$PROJECT_ROOT/config/config.json" | grep '"port"' | head -1 | cut -d':' -f2 | tr -d ' ,')
         
         echo ""
         echo "测试目标: $SERVER_IP:$SERVER_PORT"

@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Options
 option(ENABLE_REALSENSE "Enable Intel RealSense camera support" ON)
-option(USE_NATIVE_WEBRTC "Use native WebRTC implementation" ON)
 
 # Find required packages
 find_package(PkgConfig REQUIRED)
@@ -19,7 +18,11 @@ pkg_check_modules(LIBAV REQUIRED libavcodec libavformat libavutil libswscale)
 
 # RealSense (optional)
 if(ENABLE_REALSENSE)
-    find_package(realsense2)
+    # Find Fast-DDS dependencies first (required by RealSense)
+    find_package(fastcdr QUIET)
+    find_package(fastrtps QUIET)
+    
+    find_package(realsense2 QUIET)
     if(realsense2_FOUND)
         message(STATUS "Found RealSense: ${realsense2_VERSION}")
         add_definitions(-DENABLE_REALSENSE)
@@ -34,30 +37,49 @@ else()
     set(REALSENSE_LIBS "")
 endif()
 
-# WebRTC native API
+# WebRTC native API (社区预编译版本)
 set(WEBRTC_ROOT_DIR "/opt/webrtc" CACHE PATH "WebRTC root directory")
-if(USE_NATIVE_WEBRTC)
-    if(EXISTS ${WEBRTC_ROOT_DIR})
-        message(STATUS "Using native WebRTC from: ${WEBRTC_ROOT_DIR}")
-        add_definitions(-DUSE_NATIVE_WEBRTC)
-        
+if(EXISTS ${WEBRTC_ROOT_DIR})
+    message(STATUS "Using prebuilt WebRTC from: ${WEBRTC_ROOT_DIR}")
+    add_definitions(-DWEBRTC_POSIX)
+    add_definitions(-DWEBRTC_LINUX)
+    
+    # 包含目录 - 适配预编译库的目录结构
+    if(EXISTS ${WEBRTC_ROOT_DIR}/include)
+        # 标准预编译库结构 (include/ 和 lib/)
+        include_directories(
+            ${WEBRTC_ROOT_DIR}/include
+            ${WEBRTC_ROOT_DIR}/include/third_party/abseil-cpp
+            ${WEBRTC_ROOT_DIR}/include/third_party/libyuv/include
+        )
+        link_directories(${WEBRTC_ROOT_DIR}/lib)
+    else()
+        # 源代码结构 (src/)
         include_directories(
             ${WEBRTC_ROOT_DIR}/src
             ${WEBRTC_ROOT_DIR}/src/third_party/abseil-cpp
+            ${WEBRTC_ROOT_DIR}/src/third_party/libyuv/include
         )
-        
-        link_directories(${WEBRTC_ROOT_DIR}/src/out/Default/obj)
-        
-        set(WEBRTC_LIBS
-            webrtc
-        )
-    else()
-        message(WARNING "WebRTC not found at ${WEBRTC_ROOT_DIR}, using simplified implementation")
-        set(USE_NATIVE_WEBRTC OFF)
-        set(WEBRTC_LIBS "")
+        if(EXISTS ${WEBRTC_ROOT_DIR}/src/out/Release)
+            link_directories(${WEBRTC_ROOT_DIR}/src/out/Release/obj)
+        elseif(EXISTS ${WEBRTC_ROOT_DIR}/src/out/Default)
+            link_directories(${WEBRTC_ROOT_DIR}/src/out/Default/obj)
+        else()
+            link_directories(${WEBRTC_ROOT_DIR}/lib)
+        endif()
     endif()
+    
+    # WebRTC 库及其依赖
+    set(WEBRTC_LIBS
+        webrtc
+        dl
+        pthread
+        rt
+        X11
+    )
 else()
-    message(STATUS "Using simplified WebRTC implementation")
+    message(WARNING "WebRTC not found at ${WEBRTC_ROOT_DIR}, using simplified implementation")
+    message(WARNING "Please run: sudo ./scripts/install_webrtc.sh")
     set(WEBRTC_LIBS "")
 endif()
 
@@ -74,19 +96,13 @@ set(SOURCES
     src/video_source.cpp
     src/opencv_source.cpp
     src/config_parser.cpp
-    src/h265_encoder.cpp
-    src/h265_decoder.cpp
 )
 
 # Choose WebRTC implementation
-if(USE_NATIVE_WEBRTC)
-    list(APPEND SOURCES 
-        src/webrtc_client_native.cpp
-        src/custom_video_source.cpp
-    )
-else()
-    list(APPEND SOURCES src/webrtc_client.cpp)
-endif()
+list(APPEND SOURCES 
+    src/webrtc_client.cpp
+    src/custom_video_source.cpp
+)
 
 # Add RealSense source only if enabled
 if(ENABLE_REALSENSE AND realsense2_FOUND)

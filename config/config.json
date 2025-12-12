@@ -1,0 +1,31 @@
+{
+  "webrtc": {
+    "server": {
+      "ip": "192.168.115.238",
+      "port": 50061
+    },
+    "ice_servers": [
+      {
+        "urls": ["stun:106.14.31.123:3478"]
+      },
+      {
+        "urls": ["turn:106.14.31.123:3478"],
+        "username": "rxjqr",
+        "credential": "rxjqrTurn123"
+      }
+    ]
+  },
+  "video": {
+    "source": "camera",
+    "width": 640,
+    "height": 480,
+    "fps": 30,
+    "device_id": 0,
+    "file_path": "",
+    "enable_depth": false
+  },
+  "logging": {
+    "level": "info",
+    "enable_timestamp": true
+  }
+}
