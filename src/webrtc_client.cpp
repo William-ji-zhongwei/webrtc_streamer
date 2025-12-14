@@ -312,10 +312,19 @@ void WebRTCClient::OnOfferCreated(webrtc::SessionDescriptionInterface* desc) {
     desc->ToString(&sdp);
     
     std::ostringstream json;
-    json << "{\"type\":\"offer\",\"sdp\":\"" << escapeJsonString(sdp) << "\"}";
+    json << "{\"type\":\"offer\",\"sdp\":\"" << escapeJsonString(sdp) << "\"";
+    
+    // 如果指定了目标 ID，添加到消息中
+    if (!webrtc_config_.target_id.empty()) {
+        json << ",\"target_id\":\"" << webrtc_config_.target_id << "\"";
+        std::cout << "📤 Sending offer to: " << webrtc_config_.target_id << std::endl;
+    } else {
+        std::cout << "📤 Broadcasting offer to all receivers" << std::endl;
+    }
+    
+    json << "}";
     
     sendMessage(json.str());
-    std::cout << "📤 Offer sent" << std::endl;
 }
 
 void WebRTCClient::OnAnswerSet() {
@@ -501,6 +510,17 @@ void WebRTCClient::signalingThread() {
     
     std::cout << "✅ WebSocket connected" << std::endl;
     
+    // Register with server
+    std::ostringstream register_msg;
+    register_msg << "{\"type\":\"register\",\"client_id\":\"" 
+                 << webrtc_config_.client_id << "\"}";
+    sendMessage(register_msg.str());
+    std::cout << "📤 Registered as: " << webrtc_config_.client_id << std::endl;
+    
+    // Wait for registration confirmation
+    std::string reg_response = receiveMessage();
+    std::cout << "📥 Server response: " << reg_response << std::endl;
+    
     // Create PeerConnection and add video track
     if (!createPeerConnection() || !addVideoTrack()) {
         return;
@@ -518,7 +538,7 @@ void WebRTCClient::signalingThread() {
             continue;
         }
         
-        std::cout << "Received message: " << message << std::endl;
+        std::cout << "📥 Received: " << message << std::endl;
 
         // Parse JSON (simplified)
         if (message.find("\"type\"") != std::string::npos && 
@@ -528,12 +548,11 @@ void WebRTCClient::signalingThread() {
             size_t sdp_key_pos = message.find("\"sdp\"");
             if (sdp_key_pos == std::string::npos) continue;
             
-            size_t sdp_start_quote = message.find("\"", sdp_key_pos + 5); // Skip "sdp"
+            size_t sdp_start_quote = message.find("\"", sdp_key_pos + 5);
             if (sdp_start_quote == std::string::npos) continue;
             
             size_t sdp_end_quote = message.find("\"", sdp_start_quote + 1);
             while (sdp_end_quote != std::string::npos && message[sdp_end_quote-1] == '\\') {
-                 // Skip escaped quotes if any (though SDP usually doesn't have quotes inside)
                  sdp_end_quote = message.find("\"", sdp_end_quote + 1);
             }
             if (sdp_end_quote == std::string::npos) continue;
@@ -566,7 +585,7 @@ void WebRTCClient::signalingThread() {
                     new rtc::RefCountedObject<SetSessionDescriptionObserver>(this)
                 );
                 peer_connection_->SetRemoteDescription(observer.get(), answer.release());
-                std::cout << "📥 Answer received and set" << std::endl;
+                std::cout << "✅ Answer received and set" << std::endl;
             }
         }
     }

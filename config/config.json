@@ -1,9 +1,11 @@
 {
   "webrtc": {
     "server": {
-      "ip": "192.168.115.238",
+      "ip": "106.14.31.123",
       "port": 50061
     },
+    "client_id": "sender_001",
+    "target_id": "",
     "ice_servers": [
       {
         "urls": ["stun:106.14.31.123:3478"]

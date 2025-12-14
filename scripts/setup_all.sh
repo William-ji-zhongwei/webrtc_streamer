@@ -35,7 +35,7 @@ sudo apt-get update
 # 步骤 2: 安装基础依赖
 echo "步骤 2/5: 安装基础依赖..."
 echo "-------------------"
-read -p "是否安装 WebRTC 和 H.265 编解码器依赖? (y/n) " -n 1 -r
+read -p "是否安装 WebRTC 依赖? (y/n) " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     sudo ./scripts/install_webrtc_deps.sh

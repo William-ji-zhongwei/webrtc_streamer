@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# WebRTC + H.265 编解码器安装脚本
+# WebRTC + H.264 编解码器安装脚本
 
 set -e
 
 echo "=========================================="
-echo "安装 WebRTC 和 H.265 编解码器依赖"
+echo "安装 WebRTC 和 H.264 编解码器依赖"
 echo "=========================================="
 
 # 安装基础编译工具
@@ -19,20 +19,17 @@ sudo apt-get install -y \
     python3 \
     python3-pip
 
-# 安装 FFmpeg 开发库 (H.265 解码)
-echo "📹 安装 FFmpeg 库..."
+# 安装 OpenCV 所需的 OpenGL 库
+echo "🖼️  安装 OpenGL 库..."
 sudo apt-get install -y \
-    libavcodec-dev \
-    libavformat-dev \
-    libavutil-dev \
-    libswscale-dev \
-    libavfilter-dev
+    libgl1-mesa-glx \
+    libglib2.0-0
 
-# 安装 x265 (H.265 编码)
-echo "🎬 安装 x265 编码器..."
+# 安装 OpenCV
+echo "📹 安装 OpenCV..."
 sudo apt-get install -y \
-    libx265-dev \
-    x265
+    libopencv-dev \
+    python3-opencv
 
 # 安装 WebRTC 依赖
 echo "🌐 安装 WebRTC 依赖..."

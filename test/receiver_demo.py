@@ -7,7 +7,7 @@ WebRTC 接收端 Demo - Python 版本
 pip install aiortc opencv-python numpy websockets av
 
 运行方式：
-python receiver_demo.py
+python receiver_demo.py --server-ip 106.14.31.123 --client-id receiver_001
 """
 
 import asyncio
@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 class VideoReceiver:
-    def __init__(self, server_ip="0.0.0.0", server_port=50061, 
+    def __init__(self, server_ip="106.14.31.123", server_port=50061,
+                 client_id="receiver_001",
                  stun_server="106.14.31.123:3478",
                  turn_server="106.14.31.123:3478",
                  turn_username="rxjqr",
@@ -44,8 +45,9 @@ class VideoReceiver:
         初始化视频接收器
         
         Args:
-            server_ip: 信令服务器监听 IP（0.0.0.0 表示监听所有接口）
+            server_ip: 信令服务器 IP
             server_port: 信令服务器端口
+            client_id: 客户端 ID
             stun_server: STUN 服务器地址
             turn_server: TURN 服务器地址
             turn_username: TURN 用户名
@@ -54,7 +56,9 @@ class VideoReceiver:
         """
         self.server_ip = server_ip
         self.server_port = server_port
+        self.client_id = client_id
         self.codec = codec.lower()
+        self.sender_id = None  # 发送端的 ID
         
         # 配置 ICE 服务器
         self.ice_servers = [
@@ -72,6 +76,7 @@ class VideoReceiver:
         self.frame_count = 0
         self.running = False
         
+        logger.info(f"客户端 ID: {self.client_id}")
         logger.info(f"使用编解码器: {self.codec.upper()}")
 
     async def receive_frames(self):
@@ -145,9 +150,13 @@ class VideoReceiver:
         data = json.loads(message)
         msg_type = data.get('type')
         
-        if msg_type == 'offer':
-            logger.info("收到 offer")
-            logger.debug(f"SDP: {data['sdp'][:200]}...")
+        if msg_type == 'registered':
+            logger.info(f"✅ 已注册: {data.get('client_id')}")
+            
+        elif msg_type == 'offer':
+            # 保存发送端 ID
+            self.sender_id = data.get('from')
+            logger.info(f"📥 收到来自 {self.sender_id} 的 offer")
             
             # 设置远端描述
             offer = RTCSessionDescription(sdp=data['sdp'], type='offer')
@@ -156,32 +165,23 @@ class VideoReceiver:
                 await self.pc.setRemoteDescription(offer)
             except Exception as e:
                 logger.error(f"设置远端描述失败: {e}")
-                logger.debug(f"完整 SDP:\n{data['sdp']}")
-                # 尝试修改 SDP 以兼容
-                # 如果 C++ 端没有发送视频编解码器，我们需要添加默认编解码器
-                modified_sdp = self._add_video_codec_to_sdp(data['sdp'])
-                if modified_sdp != data['sdp']:
-                    logger.info("尝试使用修改后的 SDP")
-                    offer = RTCSessionDescription(sdp=modified_sdp, type='offer')
-                    await self.pc.setRemoteDescription(offer)
-                else:
-                    raise
+                raise
             
             # 创建 answer
             answer = await self.pc.createAnswer()
             await self.pc.setLocalDescription(answer)
             
-            # 发送 answer
+            # 发送 answer (回复给发送端)
             await self.ws.send(json.dumps({
                 'type': 'answer',
-                'sdp': self.pc.localDescription.sdp
+                'sdp': self.pc.localDescription.sdp,
+                'target_id': self.sender_id  # 指定目标
             }))
-            logger.info("已发送 answer")
+            logger.info(f"📤 已发送 answer 到 {self.sender_id}")
             
         elif msg_type == 'candidate':
-            logger.info("收到 ICE candidate")
+            logger.debug("📥 收到 ICE candidate")
             candidate_data = data['candidate']
-            # 使用 candidate_from_sdp 解析候选字符串
             candidate = candidate_from_sdp(candidate_data['candidate'])
             candidate.sdpMid = candidate_data.get('sdpMid')
             candidate.sdpMLineIndex = candidate_data.get('sdpMLineIndex')
@@ -224,7 +224,7 @@ class VideoReceiver:
         return '\r\n'.join(new_lines) if modified else sdp
 
     async def run(self):
-        """运行接收器"""
+        """运行接收器（作为客户端连接到信令服务器）"""
         self.running = True
         
         # 创建 PeerConnection
@@ -232,32 +232,25 @@ class VideoReceiver:
             configuration=RTCConfiguration(iceServers=self.ice_servers)
         )
         
-        logger.info(f"WebSocket 信令服务器监听于 ws://{self.server_ip}:{self.server_port}")
-        logger.info("等待客户端连接...")
+        logger.info(f"连接到信令服务器 ws://{self.server_ip}:{self.server_port}")
         
         @self.pc.on("track")
         async def on_track(track):
-            logger.info(f"接收到媒体轨道: {track.kind}")
+            logger.info(f"📹 接收到媒体轨道: {track.kind}")
             if track.kind == "video":
                 self.video_track = track
-                logger.info("视频轨道已就绪")
+                logger.info("✅ 视频轨道已就绪")
 
         @self.pc.on("connectionstatechange")
         async def on_connectionstatechange():
-            logger.info(f"连接状态: {self.pc.connectionState}")
+            logger.info(f"🔗 连接状态: {self.pc.connectionState}")
             if self.pc.connectionState == "connected":
-                logger.info("WebRTC 连接成功建立！")
-            elif self.pc.connectionState == "failed":
-                logger.error("WebRTC 连接失败")
-                self.running = False
-            elif self.pc.connectionState == "closed":
-                logger.info("WebRTC 连接已关闭")
-                self.running = False
+                logger.info("✅ WebRTC 连接成功建立！")
 
         @self.pc.on("iceconnectionstatechange")
         async def on_iceconnectionstatechange():
-            logger.info(f"ICE 连接状态: {self.pc.iceConnectionState}")
-            if self.pc.iceConnectionState == "completed" or self.pc.iceConnectionState == "connected":
+            logger.info(f"🧊 ICE 连接状态: {self.pc.iceConnectionState}")
+            if self.pc.iceConnectionState in ["completed", "connected"]:
                 logger.info("✅ ICE 连接已建立，视频流应该开始传输")
         
         @self.pc.on("icecandidate")
@@ -269,20 +262,29 @@ class VideoReceiver:
                         'candidate': candidate.candidate,
                         'sdpMid': candidate.sdpMid,
                         'sdpMLineIndex': candidate.sdpMLineIndex
-                    }
+                    },
+                    'target_id': self.sender_id  # 发送给发送端
                 }))
 
         try:
-            # 启动 WebSocket 服务器
-            async with websockets.serve(
-                self.handle_client,
-                self.server_ip,
-                self.server_port
-            ):
-                logger.info("WebSocket 服务器已启动")
-                # 等待连接和处理
-                await asyncio.Future()  # 永久运行
+            # 连接到 WebSocket 信令服务器
+            async with websockets.connect(f"ws://{self.server_ip}:{self.server_port}") as websocket:
+                self.ws = websocket
+                logger.info("✅ 已连接到信令服务器")
                 
+                # 注册
+                await self.ws.send(json.dumps({
+                    'type': 'register',
+                    'client_id': self.client_id
+                }))
+                
+                # 启动视频接收任务
+                video_task = asyncio.create_task(self.receive_frames())
+                
+                # 处理 WebSocket 消息
+                async for message in websocket:
+                    await self.handle_websocket_message(message)
+                    
         except KeyboardInterrupt:
             logger.info("收到中断信号")
         except Exception as e:
@@ -291,33 +293,6 @@ class VideoReceiver:
             logger.info("清理资源...")
             self.running = False
             await self.cleanup()
-    
-    async def handle_client(self, websocket, path):
-        """处理客户端连接"""
-        logger.info(f"客户端已连接: {websocket.remote_address}")
-        self.ws = websocket
-        self.running = True
-        
-        # 启动视频接收任务
-        video_task = asyncio.create_task(self.receive_frames())
-        
-        try:
-            # 处理 WebSocket 消息
-            async for message in websocket:
-                await self.handle_websocket_message(message)
-            
-        except websockets.exceptions.ConnectionClosed:
-            logger.info("客户端断开连接")
-        except Exception as e:
-            logger.error(f"处理客户端错误: {e}", exc_info=True)
-        finally:
-            self.running = False
-            self.ws = None
-            # 等待视频任务结束
-            try:
-                await video_task
-            except Exception:
-                pass
 
     async def cleanup(self):
         """清理资源"""
@@ -330,11 +305,13 @@ class VideoReceiver:
 
 
 async def main():
-    parser = argparse.ArgumentParser(description='WebRTC 视频流接收端 (支持 H.264)')
-    parser.add_argument('--ip', default='0.0.0.0', 
-                        help='信令服务器监听 IP (default: 0.0.0.0)')
-    parser.add_argument('--port', type=int, default=50061, 
+    parser = argparse.ArgumentParser(description='WebRTC 视频流接收端')
+    parser.add_argument('--server-ip', default='106.14.31.123', 
+                        help='信令服务器 IP (default: 106.14.31.123)')
+    parser.add_argument('--server-port', type=int, default=50061, 
                         help='信令服务器端口 (default: 50061)')
+    parser.add_argument('--client-id', default='receiver_001',
+                        help='客户端 ID (default: receiver_001)')
     parser.add_argument('--stun', default='106.14.31.123:3478',
                         help='STUN 服务器地址 (default: 106.14.31.123:3478)')
     parser.add_argument('--turn', default='106.14.31.123:3478',
@@ -350,8 +327,9 @@ async def main():
     args = parser.parse_args()
     
     receiver = VideoReceiver(
-        server_ip=args.ip,
-        server_port=args.port,
+        server_ip=args.server_ip,
+        server_port=args.server_port,
+        client_id=args.client_id,
         stun_server=args.stun,
         turn_server=args.turn,
         turn_username=args.turn_user,
@@ -364,14 +342,11 @@ async def main():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("WebRTC 视频接收端 (WebSocket + H.264)")
+    print("WebRTC 视频接收端")
     print("=" * 60)
-    print("\n配置信息:")
-    print("- WebSocket 信令服务器: ws://0.0.0.0:50061")
-    print("- STUN/TURN: 106.14.31.123:3478")
-    print("- 支持编解码器: H.264, VP8, VP9")
-    print("\n等待发送端连接...")
-    print("按 'q' 键退出\n")
+    print("\n使用方法:")
+    print("python receiver_demo.py --server-ip 106.14.31.123 --client-id receiver_001")
+    print("\n按 'q' 键退出\n")
     
     try:
         asyncio.run(main())

@@ -80,6 +80,17 @@ bool ConfigParser::loadFromFile(const std::string& config_file) {
             config_.webrtc.server_port = std::stoi(port_str);
         }
         
+        // 解析客户端 ID 和目标 ID
+        std::string client_id = getJsonValue(json, "client_id");
+        if (!client_id.empty()) {
+            config_.webrtc.client_id = client_id;
+        }
+        
+        std::string target_id = getJsonValue(json, "target_id");
+        if (!target_id.empty()) {
+            config_.webrtc.target_id = target_id;
+        }
+        
         // 解析 ICE servers (简化版本 - 只解析第一个 STUN 和 TURN)
         // 生产环境应使用完整的 JSON 库
         size_t ice_pos = json.find("\"ice_servers\"");

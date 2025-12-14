@@ -27,9 +27,12 @@ struct IceServer {
 struct WebRTCConfig {
     std::string server_ip;
     int server_port;
+    std::string client_id;      // 客户端 ID
+    std::string target_id;      // 目标接收方 ID（可选，为空则广播）
     std::vector<IceServer> ice_servers;
     
-    WebRTCConfig() : server_ip("192.168.1.34"), server_port(50061) {
+    WebRTCConfig() : server_ip("192.168.1.34"), server_port(50061),
+                     client_id("sender_001"), target_id("") {
         // 默认添加 Google STUN 服务器
         std::vector<std::string> stun_urls = {"stun:stun.l.google.com:19302"};
         ice_servers.push_back(IceServer(stun_urls));
