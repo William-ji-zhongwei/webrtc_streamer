@@ -317,10 +317,6 @@ bool WebRTCClient::createPeerConnection() {
     // RTCP Mux policy - 必须使用 mux
     config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
     
-    // ICE 传输策略：优先使用 relay（TURN），确保跨 NAT 连接
-    // 注意：这会优先使用 TURN，但如果 TURN 不可用会回退到其他方式
-    // config.ice_transports_type = webrtc::PeerConnectionInterface::kRelay;  // 仅用于调试
-    
     // ICE candidate pool size - 预分配候选池
     config.ice_candidate_pool_size = 4;
     

@@ -8,12 +8,12 @@
     "target_id": "receiver_001",
     "ice_servers": [
       {
-        "urls": ["stun:106.14.31.123:3478"]
-      },
-      {
         "urls": ["turn:106.14.31.123:3478"],
         "username": "rxjqr",
         "credential": "rxjqrTurn123"
+      },
+      {
+        "urls": ["stun:106.14.31.123:3478"]
       }
     ]
   },
