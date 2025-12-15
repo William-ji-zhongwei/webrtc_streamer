@@ -14,6 +14,7 @@ import asyncio
 import cv2
 import numpy as np
 import json
+from aiohttp import web
 from aiortc import (
     RTCPeerConnection, 
     RTCSessionDescription, 
@@ -75,9 +76,81 @@ class VideoReceiver:
         self.video_track = None
         self.frame_count = 0
         self.running = False
+        self.latest_frame = None
+        self.web_runner = None
+        self.web_site = None
         
         logger.info(f"客户端 ID: {self.client_id}")
         logger.info(f"使用编解码器: {self.codec.upper()}")
+
+    async def index(self, request):
+        content = """
+        <html>
+        <head>
+            <title>WebRTC Receiver</title>
+            <style>
+                body { font-family: Arial, sans-serif; text-align: center; background-color: #f0f0f0; }
+                h1 { color: #333; }
+                .video-container { 
+                    margin: 20px auto; 
+                    border: 5px solid #fff; 
+                    box-shadow: 0 0 10px rgba(0,0,0,0.2); 
+                    display: inline-block;
+                    background-color: #000;
+                    min-width: 640px;
+                    min-height: 480px;
+                }
+                img { max-width: 100%; display: block; }
+                .status { margin-top: 10px; color: #666; }
+            </style>
+        </head>
+        <body>
+            <h1>WebRTC Receiver Stream</h1>
+            <div class="video-container">
+                <img src="/video_feed" alt="Waiting for stream..." />
+            </div>
+            <div class="status">
+                Receiving stream via WebRTC, displaying via MJPEG
+            </div>
+        </body>
+        </html>
+        """
+        return web.Response(text=content, content_type='text/html')
+
+    async def video_feed(self, request):
+        boundary = "frame"
+        response = web.StreamResponse(status=200, reason='OK', headers={
+            'Content-Type': 'multipart/x-mixed-replace;boundary={}'.format(boundary)
+        })
+        await response.prepare(request)
+        
+        while self.running:
+            if self.latest_frame is not None:
+                try:
+                    await response.write(b'--' + boundary.encode() + b'\r\n')
+                    await response.write(b'Content-Type: image/jpeg\r\n')
+                    await response.write(b'Content-Length: ' + str(len(self.latest_frame)).encode() + b'\r\n')
+                    await response.write(b'\r\n')
+                    await response.write(self.latest_frame)
+                    await response.write(b'\r\n')
+                    # Limit FPS for browser display (approx 30 FPS)
+                    await asyncio.sleep(0.033)
+                except Exception:
+                    break
+            else:
+                await asyncio.sleep(0.1)
+        return response
+
+    async def start_web_server(self, port=8080):
+        app = web.Application()
+        app.router.add_get('/', self.index)
+        app.router.add_get('/video_feed', self.video_feed)
+        
+        self.web_runner = web.AppRunner(app)
+        await self.web_runner.setup()
+        self.web_site = web.TCPSite(self.web_runner, '0.0.0.0', port)
+        await self.web_site.start()
+        logger.info(f"Web server started at http://localhost:{port}")
 
     async def receive_frames(self):
         """接收并显示视频帧（支持 H.264 解码）"""
@@ -119,14 +192,10 @@ class VideoReceiver:
                             2
                         )
                         
-                        # 显示视频
-                        cv2.imshow(f'WebRTC Receiver ({self.codec.upper()})', img)
-                        
-                        # 按 'q' 退出
-                        if cv2.waitKey(1) & 0xFF == ord('q'):
-                            logger.info("用户请求退出")
-                            self.running = False
-                            break
+                        # Encode to JPEG for web streaming
+                        ret, buffer = cv2.imencode('.jpg', img)
+                        if ret:
+                            self.latest_frame = buffer.tobytes()
                             
                         if self.frame_count % 30 == 0:
                             logger.info(f"✅ 已接收 {self.frame_count} 帧 ({self.codec.upper()})")
@@ -143,7 +212,7 @@ class VideoReceiver:
                     await asyncio.sleep(0.1)
                     
         finally:
-            cv2.destroyAllWindows()
+            pass
 
     async def handle_websocket_message(self, message):
         """处理 WebSocket 消息"""
@@ -227,6 +296,9 @@ class VideoReceiver:
         """运行接收器（作为客户端连接到信令服务器）"""
         self.running = True
         
+        # 启动 Web 服务器
+        await self.start_web_server(port=8080)
+        
         # 创建 PeerConnection
         self.pc = RTCPeerConnection(
             configuration=RTCConfiguration(iceServers=self.ice_servers)
@@ -300,7 +372,10 @@ class VideoReceiver:
             await self.pc.close()
         if self.ws:
             await self.ws.close()
-        cv2.destroyAllWindows()
+        if self.web_site:
+            await self.web_site.stop()
+        if self.web_runner:
+            await self.web_runner.cleanup()
         logger.info("资源清理完成")
 
 
@@ -346,7 +421,8 @@ if __name__ == "__main__":
     print("=" * 60)
     print("\n使用方法:")
     print("python receiver_demo.py --server-ip 106.14.31.123 --client-id receiver_001")
-    print("\n按 'q' 键退出\n")
+    print("\nWeb 界面: http://localhost:8080")
+    print("按 Ctrl+C 退出\n")
     
     try:
         asyncio.run(main())

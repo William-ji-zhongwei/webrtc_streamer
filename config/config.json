@@ -5,7 +5,7 @@
       "port": 50061
     },
     "client_id": "sender_001",
-    "target_id": "",
+    "target_id": "receiver_001",
     "ice_servers": [
       {
         "urls": ["stun:106.14.31.123:3478"]

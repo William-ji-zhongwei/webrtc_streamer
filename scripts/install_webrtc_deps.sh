@@ -22,7 +22,7 @@ sudo apt-get install -y \
 # 安装 OpenCV 所需的 OpenGL 库
 echo "🖼️  安装 OpenGL 库..."
 sudo apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0
 
 # 安装 OpenCV
@@ -59,15 +59,6 @@ if [ ! -d "$DEPOT_TOOLS_DIR" ]; then
 else
     echo "depot_tools 已存在"
 fi
-
-# 安装 Python 依赖 (接收端)
-echo "🐍 安装 Python 依赖..."
-pip3 install --user \
-    aiortc \
-    opencv-python \
-    numpy \
-    websockets \
-    av
 
 echo ""
 echo "=========================================="

@@ -278,7 +278,7 @@ sudo ufw allow 3478/udp
 
 ```bash
 # 接收端：确保安装了 OpenGL 库
-sudo apt-get install libgl1-mesa-glx libglib2.0-0
+sudo apt-get install libgl1 libglib2.0-0
 
 # 检查编解码器兼容性
 # 发送端和接收端应使用相同的编解码器
