@@ -24,7 +24,7 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 # 步骤 1: 给所有脚本添加执行权限
-echo "步骤 1/5: 设置脚本权限..."
+echo "步骤 1/6: 设置脚本权限..."
 echo "-------------------"
 chmod +x scripts/*.sh
 echo "✅ 脚本权限设置完成"
@@ -32,8 +32,20 @@ echo ""
 
 sudo apt-get update
 
-# 步骤 2: 安装基础依赖
-echo "步骤 2/5: 安装基础依赖..."
+# 步骤 2: 安装 nlohmann-json 库
+echo "步骤 2/6: 安装 nlohmann-json 库..."
+echo "-------------------"
+if dpkg -l | grep -q nlohmann-json3-dev; then
+    echo "✅ nlohmann-json3-dev 已安装"
+else
+    echo "安装 nlohmann-json3-dev..."
+    sudo apt-get install -y nlohmann-json3-dev
+    echo "✅ nlohmann-json3-dev 安装完成"
+fi
+echo ""
+
+# 步骤 3: 安装基础依赖
+echo "步骤 3/6: 安装基础依赖..."
 echo "-------------------"
 read -p "是否安装 WebRTC 依赖? (y/n) " -n 1 -r
 echo
@@ -45,8 +57,8 @@ else
 fi
 echo ""
 
-# 步骤 3: 安装 WebRTC 预编译库
-echo "步骤 3/5: 安装 WebRTC 预编译库..."
+# 步骤 4: 安装 WebRTC 预编译库
+echo "步骤 4/6: 安装 WebRTC 预编译库..."
 echo "-------------------"
 if [ -d "/opt/webrtc" ]; then
     echo "检测到 WebRTC 已安装在 /opt/webrtc"
@@ -72,8 +84,8 @@ else
 fi
 echo ""
 
-# 步骤 4: 安装 RealSense SDK (可选)
-echo "步骤 4/5: 安装 RealSense SDK (可选)..."
+# 步骤 5: 安装 RealSense SDK (可选)
+echo "步骤 5/6: 安装 RealSense SDK (可选)..."
 echo "-------------------"
 if pkg-config --exists realsense2 2>/dev/null; then
     echo "✅ RealSense SDK 已安装"
@@ -92,8 +104,8 @@ else
 fi
 echo ""
 
-# 步骤 5: 编译项目
-echo "步骤 5/5: 编译项目..."
+# 步骤 6: 编译项目
+echo "步骤 6/6: 编译项目..."
 echo "-------------------"
 read -p "是否现在编译项目? (y/n) " -n 1 -r
 echo
