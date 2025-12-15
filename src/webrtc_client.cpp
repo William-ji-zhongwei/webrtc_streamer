@@ -40,20 +40,44 @@ public:
     }
     
     void OnIceConnectionChange(webrtc::PeerConnectionInterface::IceConnectionState new_state) override {
-        RTC_LOG(LS_INFO) << "ICE connection state: " << new_state;
+        const char* state_str[] = {
+            "new", "checking", "connected", "completed", 
+            "failed", "disconnected", "closed"
+        };
+        int state_idx = static_cast<int>(new_state);
+        std::cout << "🧊 ICE connection state: " << state_str[state_idx] << std::endl;
+        
         if (new_state == webrtc::PeerConnectionInterface::kIceConnectionConnected) {
+            std::cout << "✅ ICE connection established!" << std::endl;
             client_->OnConnectionChange(true);
-        } else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed ||
-                   new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
+        } else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionFailed) {
+            std::cout << "❌ ICE connection failed! Check TURN server configuration." << std::endl;
+            client_->OnConnectionChange(false);
+        } else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionDisconnected) {
+            std::cout << "⚠️  ICE connection disconnected" << std::endl;
+        } else if (new_state == webrtc::PeerConnectionInterface::kIceConnectionClosed) {
+            std::cout << "⚠️  ICE connection closed" << std::endl;
             client_->OnConnectionChange(false);
         }
     }
     
     void OnIceGatheringChange(webrtc::PeerConnectionInterface::IceGatheringState new_state) override {
-        RTC_LOG(LS_INFO) << "ICE gathering state: " << new_state;
+        const char* state_str[] = {"new", "gathering", "complete"};
+        int state_idx = static_cast<int>(new_state);
+        std::cout << "🔍 ICE gathering state: " << state_str[state_idx] << std::endl;
     }
     
     void OnIceCandidate(const webrtc::IceCandidateInterface* candidate) override {
+        std::string sdp;
+        candidate->ToString(&sdp);
+        // 显示 candidate 类型（host/srflx/relay）
+        if (sdp.find("typ host") != std::string::npos) {
+            std::cout << "📡 ICE candidate (host): local network" << std::endl;
+        } else if (sdp.find("typ srflx") != std::string::npos) {
+            std::cout << "📡 ICE candidate (srflx): via STUN" << std::endl;
+        } else if (sdp.find("typ relay") != std::string::npos) {
+            std::cout << "📡 ICE candidate (relay): via TURN ✅" << std::endl;
+        }
         client_->OnIceCandidate(candidate);
     }
     
@@ -150,19 +174,67 @@ std::string encodeWebSocketFrame(const std::string& message) {
 std::string decodeWebSocketFrame(const char* data, size_t len) {
     if (len < 2) return "";
     
-    size_t pos = 2;
-    size_t payload_len = data[1] & 0x7F;
+    // 检查 opcode（第一个字节的低 4 位）
+    unsigned char opcode = data[0] & 0x0F;
     
+    // 0x8 = close, 0x9 = ping, 0xA = pong
+    if (opcode == 0x8) {
+        // Close frame
+        return "";
+    } else if (opcode == 0x9 || opcode == 0xA) {
+        // Ping/Pong frame - 自动回复 pong（如果是 ping）
+        if (opcode == 0x9) {
+            // 这是 ping，应该回复 pong（在接收消息的地方处理）
+        }
+        return "";  // 不返回 ping/pong 内容
+    }
+    
+    // 检查是否有 mask（第二个字节的最高位）
+    bool is_masked = (data[1] & 0x80) != 0;
+    size_t payload_len = data[1] & 0x7F;
+    size_t pos = 2;
+    
+    // 处理扩展 payload 长度
     if (payload_len == 126) {
         if (len < 4) return "";
         payload_len = (static_cast<unsigned char>(data[2]) << 8) | 
                       static_cast<unsigned char>(data[3]);
         pos = 4;
+    } else if (payload_len == 127) {
+        if (len < 10) return "";
+        // 64-bit 长度（通常不需要，但为了完整性）
+        payload_len = 0;
+        for (int i = 0; i < 8; i++) {
+            payload_len = (payload_len << 8) | static_cast<unsigned char>(data[2 + i]);
+        }
+        pos = 10;
     }
     
+    // 处理 mask key
+    char mask[4] = {0};
+    if (is_masked) {
+        if (len < pos + 4) return "";
+        memcpy(mask, data + pos, 4);
+        pos += 4;
+    }
+    
+    // 检查是否有足够的数据
     if (len < pos + payload_len) return "";
     
-    return std::string(data + pos, payload_len);
+    // 解码 payload
+    std::string payload;
+    payload.reserve(payload_len);
+    
+    if (is_masked) {
+        for (size_t i = 0; i < payload_len; i++) {
+            payload.push_back(data[pos + i] ^ mask[i % 4]);
+        }
+    } else {
+        // 服务器发送的消息通常不 mask
+        payload.assign(data + pos, payload_len);
+    }
+    
+    return payload;
 }
 
 // WebRTCClient implementation
@@ -228,6 +300,30 @@ bool WebRTCClient::initialize() {
 bool WebRTCClient::createPeerConnection() {
     webrtc::PeerConnectionInterface::RTCConfiguration config;
     
+    // 配置 ICE 传输类型：允许使用所有类型（包括 TURN）
+    config.type = webrtc::PeerConnectionInterface::kAll;
+    
+    // ICE 候选过滤策略：允许所有候选
+    config.candidate_network_policy = 
+        webrtc::PeerConnectionInterface::kCandidateNetworkPolicyAll;
+    
+    // 持续收集 ICE candidates
+    config.continual_gathering_policy = 
+        webrtc::PeerConnectionInterface::GATHER_CONTINUALLY;
+    
+    // Bundle policy - 使用最大 bundle
+    config.bundle_policy = webrtc::PeerConnectionInterface::kBundlePolicyMaxBundle;
+    
+    // RTCP Mux policy - 必须使用 mux
+    config.rtcp_mux_policy = webrtc::PeerConnectionInterface::kRtcpMuxPolicyRequire;
+    
+    // ICE 传输策略：优先使用 relay（TURN），确保跨 NAT 连接
+    // 注意：这会优先使用 TURN，但如果 TURN 不可用会回退到其他方式
+    // config.ice_transports_type = webrtc::PeerConnectionInterface::kRelay;  // 仅用于调试
+    
+    // ICE candidate pool size - 预分配候选池
+    config.ice_candidate_pool_size = 4;
+    
     // Add ICE servers
     for (const auto& ice_server : webrtc_config_.ice_servers) {
         webrtc::PeerConnectionInterface::IceServer server;
@@ -236,6 +332,10 @@ bool WebRTCClient::createPeerConnection() {
         if (!ice_server.username.empty()) {
             server.username = ice_server.username;
             server.password = ice_server.credential;
+            std::cout << "🔐 Adding TURN server: " << ice_server.urls[0] 
+                      << " (user: " << ice_server.username << ")" << std::endl;
+        } else {
+            std::cout << "🌐 Adding STUN server: " << ice_server.urls[0] << std::endl;
         }
         
         config.servers.push_back(server);
@@ -289,8 +389,11 @@ bool WebRTCClient::addVideoTrack() {
 
 void WebRTCClient::createOffer() {
     webrtc::PeerConnectionInterface::RTCOfferAnswerOptions options;
-    options.offer_to_receive_video = false;
-    options.offer_to_receive_audio = false;
+    // 发送端：只发送视频，不接收
+    options.offer_to_receive_video = 0;  // 明确设置为 0（不接收）
+    options.offer_to_receive_audio = 0;  // 明确设置为 0（不接收）
+    
+    std::cout << "📤 Creating offer (sendonly mode)" << std::endl;
     
     rtc::scoped_refptr<CreateSessionDescriptionObserver> observer(
         new rtc::RefCountedObject<CreateSessionDescriptionObserver>(this)
@@ -300,19 +403,71 @@ void WebRTCClient::createOffer() {
 }
 
 void WebRTCClient::OnOfferCreated(webrtc::SessionDescriptionInterface* desc) {
+    // 获取 SDP 字符串
+    std::string sdp;
+    desc->ToString(&sdp);
+    
+    // 打印原始 Offer SDP
+    std::cout << "📤 Offer SDP (before modification):" << std::endl;
+    std::cout << sdp << std::endl;
+    
+    // 确保 SDP 中设置为 sendonly
+    // 查找并替换 a=sendrecv 或 a=recvonly 为 a=sendonly
+    size_t pos = 0;
+    while ((pos = sdp.find("a=sendrecv", pos)) != std::string::npos) {
+        sdp.replace(pos, 10, "a=sendonly");
+        std::cout << "✏️  Modified: sendrecv → sendonly" << std::endl;
+        pos += 10;
+    }
+    
+    pos = 0;
+    while ((pos = sdp.find("a=recvonly", pos)) != std::string::npos) {
+        sdp.replace(pos, 10, "a=sendonly");
+        std::cout << "✏️  Modified: recvonly → sendonly" << std::endl;
+        pos += 10;
+    }
+    
+    // 如果没有任何方向属性，添加 sendonly
+    if (sdp.find("a=sendonly") == std::string::npos && 
+        sdp.find("a=recvonly") == std::string::npos &&
+        sdp.find("a=sendrecv") == std::string::npos) {
+        
+        // 在第一个 m= 行之后添加 a=sendonly
+        size_t m_line = sdp.find("m=video");
+        if (m_line != std::string::npos) {
+            size_t next_line = sdp.find("\r\n", m_line);
+            if (next_line != std::string::npos) {
+                sdp.insert(next_line + 2, "a=sendonly\r\n");
+                std::cout << "➕ Added: a=sendonly" << std::endl;
+            }
+        }
+    }
+    
+    // 重新创建 SessionDescription
+    webrtc::SdpParseError error;
+    std::unique_ptr<webrtc::SessionDescriptionInterface> modified_desc =
+        webrtc::CreateSessionDescription(webrtc::SdpType::kOffer, sdp, &error);
+    
+    if (!modified_desc) {
+        std::cerr << "❌ Failed to parse modified SDP: " << error.description << std::endl;
+        return;
+    }
+    
+    std::cout << "📤 Offer SDP (after modification):" << std::endl;
+    std::string final_sdp;
+    modified_desc->ToString(&final_sdp);
+    std::cout << final_sdp << std::endl;
+    
     // Set local description
     rtc::scoped_refptr<SetSessionDescriptionObserver> observer(
         new rtc::RefCountedObject<SetSessionDescriptionObserver>(this)
     );
     
-    peer_connection_->SetLocalDescription(observer.get(), desc);
+    peer_connection_->SetLocalDescription(observer.get(), modified_desc.release());
     
     // Send offer via WebSocket
-    std::string sdp;
-    desc->ToString(&sdp);
-    
     std::ostringstream json;
-    json << "{\"type\":\"offer\",\"sdp\":\"" << escapeJsonString(sdp) << "\"";
+    json << "{\"type\":\"offer\",\"sdp\":\"" << escapeJsonString(final_sdp) << "\"";
     
     // 如果指定了目标 ID，添加到消息中
     if (!webrtc_config_.target_id.empty()) {
@@ -464,6 +619,32 @@ std::string WebRTCClient::receiveMessage() {
         return "";
     }
     
+    // 检查是否是 ping frame (opcode 0x9)
+    if (bytes >= 2 && (buffer[0] & 0x0F) == 0x9) {
+        // 收到 ping，发送 pong 回复
+        std::string pong_frame;
+        pong_frame.push_back(0x8A);  // FIN bit + pong opcode
+        pong_frame.push_back(0x00);  // 无 payload，无 mask
+        
+        std::lock_guard<std::mutex> lock(ws_mutex_);
+        send(ws_socket_, pong_frame.c_str(), pong_frame.length(), 0);
+        
+        // 返回空字符串，不处理 ping 消息
+        return "";
+    }
+    
+    // 检查是否是 pong frame (opcode 0xA)
+    if (bytes >= 2 && (buffer[0] & 0x0F) == 0xA) {
+        // 收到 pong，忽略
+        return "";
+    }
+    
+    // 检查是否是 close frame (opcode 0x8)
+    if (bytes >= 2 && (buffer[0] & 0x0F) == 0x8) {
+        std::cout << "⚠️  WebSocket close frame received" << std::endl;
+        return "";
+    }
+    
     return decodeWebSocketFrame(buffer, bytes);
 }
 
@@ -538,7 +719,17 @@ void WebRTCClient::signalingThread() {
             continue;
         }
         
-        std::cout << "📥 Received: " << message << std::endl;
+        // 检查是否是 keepalive 或其他控制消息
+        if (message.find("keepalive") != std::string::npos || 
+            message.find("ping") != std::string::npos ||
+            message.find("pong") != std::string::npos) {
+            // 不显示 keepalive 消息，避免日志污染
+            continue;
+        }
+        
+        std::cout << "📥 Received: " << message.substr(0, 100);
+        if (message.length() > 100) std::cout << "...";
+        std::cout << std::endl;
 
         // Parse JSON (simplified)
         if (message.find("\"type\"") != std::string::npos && 
